@@ -4,7 +4,7 @@ Fecha: 2026-09-16
 
 ## Estado
 
-**REPARACIÓN AWR/LOB EJECUTADA Y PRUEBA FUNCIONAL INICIAL EXITOSA.**
+**REPARACIÓN AWR/LOB COMPLETADA Y VALIDADA FUNCIONALMENTE.**
 
 Oracle `orcl` en la VM `kanela` continúa `OPEN`, `ACTIVE`, `READ WRITE`.
 
@@ -12,7 +12,7 @@ La causa del error repetitivo quedó aislada en AWR: `MMON_SLAVE / Auto-Flush Sl
 
 ## Punto de retorno
 
-Existe un respaldo restaurable de la VM `kanela`. Mantenerlo hasta cerrar completamente la validación posterior.
+Existe un respaldo restaurable de la VM `kanela`. Puede conservarse como punto de retorno histórico de esta intervención.
 
 ## Configuración AWR original y restaurada
 
@@ -158,7 +158,7 @@ Bloques históricos:
 
 Una consulta contra `DBA_EXTENTS` confirmó que los cuatro quedaron **sin asignación a ningún extent** después del `MOVE`. Por tanto ya no pertenecen al LOB nuevo ni a ningún segmento activo.
 
-`V$DATABASE_BLOCK_CORRUPTION` continúa registrándolos como `NOLOGGING`, pero se trata ahora de bloques libres/no asignados.
+`V$DATABASE_BLOCK_CORRUPTION` continúa registrándolos como `NOLOGGING`, pero se trata ahora de bloques libres/no asignados. No ejecutar `BLOCKRECOVER` sobre ellos sin nueva evidencia.
 
 ## RMAN post-reparación
 
@@ -190,7 +190,7 @@ Other  Blocks Failing 0
 
 Conclusión: el datafile 2 es físicamente y lógicamente legible; no hay bloques activos que fallen validación. Las cuatro marcas históricas permanecen sobre bloques ya no asignados.
 
-## Prueba funcional AWR
+## Prueba funcional AWR — EXITOSA
 
 Después de restaurar AWR a una hora se ejecutó:
 
@@ -198,16 +198,60 @@ Después de restaurar AWR a una hora se ejecutó:
 exec dbms_workload_repository.create_snapshot();
 ```
 
-El usuario reportó que la ejecución terminó correctamente (`todo bien`), sin error visible. Esto constituye una prueba funcional inicial positiva del flujo que antes fallaba durante el `INSERT INTO WRH$_SQL_PLAN`.
+La ejecución terminó correctamente.
 
-## Punto exacto de continuación
+Verificación objetiva posterior en `DBA_HIST_SNAPSHOT`:
 
-Falta solamente cerrar la validación objetiva posterior al snapshot manual:
+```text
+SNAP_ID 130356
+BEGIN_INTERVAL_TIME 16-SEP-26 12.08.23.777 PM
+END_INTERVAL_TIME   16-SEP-26 12.08.50.674 PM
 
-1. confirmar que se creó un nuevo `SNAP_ID` en `DBA_HIST_SNAPSHOT`;
-2. revisar el `alert_orcl.log` posterior a la reparación y confirmar ausencia de nuevas ocurrencias de `ORA-01578`, `ORA-01110` y `ORA-26040`;
-3. si ambas comprobaciones son limpias, marcar la reparación AWR/LOB como finalizada;
-4. conservar las cuatro marcas `NOLOGGING` como evidencia histórica mientras sigan asociadas únicamente a bloques libres/no asignados; no ejecutar `BLOCKRECOVER` sobre ellas.
+SNAP_ID 130355
+BEGIN_INTERVAL_TIME 16-SEP-26 11.00.21.748 AM
+END_INTERVAL_TIME   16-SEP-26 12.08.23.777 PM
+
+SNAP_ID 130354
+BEGIN_INTERVAL_TIME 16-SEP-26 10.41.16.000 AM
+END_INTERVAL_TIME   16-SEP-26 11.00.21.748 AM
+```
+
+El nuevo `SNAP_ID 130356` confirma que AWR volvió a completar correctamente el flujo de snapshot que antes fallaba en `WRH$_SQL_PLAN`.
+
+## Limpieza / rotación del `alert_orcl.log`
+
+El `alert_orcl.log` histórico había crecido hasta aproximadamente 541 MB.
+
+Se realizó una rotación manual conservadora manteniendo el archivo activo:
+
+```bash
+cd /home/oracle/app/oracle/diag/rdbms/orcl/orcl/trace
+cp -p alert_orcl.log alert_orcl_20260916_pre_limpieza.log
+gzip alert_orcl_20260916_pre_limpieza.log
+: > alert_orcl.log
+```
+
+Después se forzó una escritura Oracle con:
+
+```sql
+alter system switch logfile;
+```
+
+El usuario confirmó que la operación terminó correctamente y que el nuevo `alert_orcl.log` siguió recibiendo escritura normal. La historia previa quedó preservada en el archivo comprimido.
+
+## Resultado final
+
+La reparación puede considerarse **cerrada con éxito**:
+
+- Oracle abre y permanece `OPEN`, `ACTIVE`, `READ WRITE`;
+- AWR vuelve a operar cada 60 minutos;
+- retención AWR permanece en 8 días;
+- el LOB problemático fue físicamente recreado;
+- índices involucrados permanecen `VALID`;
+- los bloques históricos `NOLOGGING` quedaron fuera de cualquier extent activo;
+- `VALIDATE DATAFILE 2` y `VALIDATE CHECK LOGICAL DATAFILE 2` reportan `Blocks Failing = 0`;
+- el snapshot manual AWR generó correctamente el `SNAP_ID 130356`;
+- el `alert_orcl.log` histórico fue archivado/comprimido y el archivo activo fue reiniciado correctamente.
 
 ## No ejecutar sin nueva evidencia
 
