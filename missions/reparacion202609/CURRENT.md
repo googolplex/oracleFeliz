@@ -2,15 +2,18 @@
 
 Fecha: 2026-09-16
 
-## Documento de continuidad
+## Documentos de continuidad
 
 Para retomar esta misión sin reconstruir el contexto, leer primero:
 
 ```text
 missions/reparacion202609/HANDOFF.md
+missions/reparacion202609/capacity-20260916.md
 ```
 
-Ese archivo contiene el detalle consolidado de `zapallo`, KVM/libvirt, la VM `kanela`, CentOS 5.11, red/SSH, Oracle 11.2.0.1, datafiles, error AWR/LOB, reparación, RMAN, AWR, alert log y listener.
+`HANDOFF.md` contiene el contexto consolidado de `zapallo`, KVM/libvirt, la VM `kanela`, CentOS 5.11, red/SSH, Oracle 11.2.0.1, datafiles, error AWR/LOB, reparación, RMAN, AWR, alert log y listener.
+
+`capacity-20260916.md` contiene la medición exacta de espacio de datafiles y filesystems y su interpretación operativa.
 
 ## Estado operativo actual
 
@@ -29,18 +32,14 @@ Oracle:          11.2.0.1.0 64-bit
 Instance:        OPEN / ACTIVE
 Database ORCL:   READ WRITE
 Archive mode:    NOARCHIVELOG
-Listener:        FUNCIONANDO en la red actual de kanela
+Listener:        FUNCIONANDO en 192.168.1.60
 ```
 
 Existe un respaldo restaurable de la VM `kanela`.
 
 ## Listener
 
-Después de cambiar la red de la VM se detectó que `listener.ora` conservaba la IP antigua:
-
-```text
-192.168.0.60
-```
+Después de cambiar la red de la VM se detectó que `listener.ora` conservaba la IP antigua `192.168.0.60`.
 
 Se corrigió a:
 
@@ -54,7 +53,7 @@ Archivo:
 /home/oracle/app/oracle/product/11.2.0/dbhome_1/network/admin/listener.ora
 ```
 
-Se indicó conservar backup `listener.ora.bak_20260916`, reiniciar con `lsnrctl stop` / `lsnrctl start` y verificar con `lsnrctl status`. El usuario confirmó que el listener quedó funcionando correctamente.
+Se conservó/indicó backup `listener.ora.bak_20260916`, se reinició con `lsnrctl stop` / `lsnrctl start` y el usuario confirmó que el listener quedó funcionando correctamente.
 
 ## Reparación AWR/LOB
 
@@ -133,37 +132,49 @@ END   16-SEP-26 12.08.50.674 PM
 
 El `alert_orcl.log`, que había alcanzado aproximadamente 541 MB, fue archivado y comprimido; el archivo activo fue truncado conservando el mismo archivo y Oracle continuó escribiendo normalmente después de `alter system switch logfile`.
 
-## Datafiles conocidos
+## Capacidad actual de datafiles
 
-Tamaño total observado: aproximadamente `57.51 GB`.
-
-```text
-1 /home/oracle/app/oracle/oradata/orcl/system01.dbf     ~1.16 GB
-2 /home/oracle/app/oracle/oradata/orcl/sysaux01.dbf    ~1.19 GB
-3 /home/oracle/app/oracle/oradata/orcl/undotbs01.dbf  ~13.06 GB
-4 /home/oracle/app/oracle/oradata/orcl/users01.dbf      pequeño
-5 /home/oracle/app/oracle/oradata/orcl/example01.dbf   ~0.10 GB
-6 /ciruelas/oradata/tablas                             ~32 GB
-7 /ciruelas/oradata/amada.dbf                          ~10 GB
-```
-
-Último espacio de filesystem conocido:
+Medición confirmada:
 
 ```text
-/          23 GB libres
-/ciruelas  51 GB libres
+FILE  TABLESPACE  SIZE_MB   USED_MB   FREE_MB   USED%   AUTOEXT  MAX_MB
+1     SYSTEM       1190.00   1183.63      6.38   99.46   YES      32767.98
+2     SYSAUX       1220.00   1105.88    114.13   90.65   YES      32767.98
+3     UNDOTBS1    13370.00     26.75  13343.25    0.20   YES      32767.98
+4     USERS           5.00      4.06      0.94   81.25   YES      32767.98
+5     EXAMPLE        100.00     78.44     21.56   78.44   YES      32767.98
+6     TABLAS       32767.98  14491.67  18276.31   44.23   YES      32767.98
+7     AMANDA       10240.00    103.44  10136.56    1.01   YES      32767.98
 ```
 
-## Próxima tarea
+Filesystems actuales:
 
-Revisar capacidad real de los datafiles y tablespaces:
+```text
+/          102G total, 75G usados, 23G libres, 77% usado
+/ciruelas   98G total, 43G usados, 51G libres, 46% usado
+```
 
-1. tamaño actual;
-2. espacio usado y libre;
-3. porcentaje utilizado;
-4. `AUTOEXTENSIBLE`;
-5. `MAXBYTES` / margen potencial;
-6. comprobar simultáneamente espacio real de `/` y `/ciruelas`.
+### Interpretación
+
+- No existe una emergencia general de espacio.
+- `SYSTEM` tiene solo 6.38 MB libres dentro de su tamaño actual y depende de `AUTOEXTEND`; vigilar.
+- `SYSAUX` tiene 114.13 MB libres internos y también depende de `AUTOEXTEND`; vigilar.
+- Los datafiles alojados en `/` tienen un `MAXBYTES` teórico de ~32 GB por archivo, pero el margen físico conjunto real está limitado por los 23 GB libres del filesystem raíz y por el crecimiento del propio sistema operativo/ADR/logs.
+- `UNDOTBS1` tiene ~13.34 GB libres internos y no presenta presión.
+- `TABLAS` ya alcanzó el máximo individual del archivo (~32 GB), por lo que ese archivo no puede crecer más; sin embargo, conserva 18.28 GB libres internos (44.23% usado), por lo que no requiere ampliación ahora.
+- `/ciruelas` conserva 51 GB físicos libres; `AMANDA` tiene ~10.14 GB libres internos y margen cómodo.
+
+Detalle completo en `capacity-20260916.md`.
+
+## Próximo control recomendado
+
+Antes de cambiar tamaños o agregar datafiles, consultar:
+
+1. `INCREMENT_BY` de cada datafile autoextensible;
+2. tipo de tablespace `SMALLFILE`/`BIGFILE`, especialmente `TABLAS`;
+3. crecimiento histórico si se desea estimar horizonte de capacidad.
+
+No ampliar ni reducir datafiles todavía.
 
 ## No ejecutar sin nueva evidencia
 
