@@ -25,6 +25,7 @@
 
 ## Regla de continuidad
 - La misión maestra actual es `missions/reparacion202609/mission.md`.
-- Antes de continuar esta reparación de Oracle, leer `missions/reparacion202609/mission.md` y continuar desde el punto exacto documentado allí, sin pedir nuevamente contexto ya registrado.
+- Antes de continuar esta reparación de Oracle, leer `missions/reparacion202609/mission.md` y también `missions/reparacion202609/CURRENT.md`.
+- Continuar desde el punto exacto documentado allí, sin pedir nuevamente contexto ya registrado.
 - La misión anterior `missions/kanela-orcl/mission-01-recovery.md` queda como antecedente histórico; no usarla como punto de continuidad si existe información más reciente en `reparacion202609`.
-- Registrar en `missions/reparacion202609/mission.md` los nuevos hallazgos, cambios ejecutados, validaciones y estado final de la reparación.
+- Registrar en `missions/reparacion202609/mission.md` y/o `CURRENT.md` los nuevos hallazgos, cambios ejecutados, validaciones y estado final de la reparación.
