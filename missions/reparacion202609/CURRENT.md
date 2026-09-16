@@ -4,30 +4,54 @@ Fecha: 2026-09-16
 
 ## Estado
 
-Oracle `orcl` en `kanela` continúa `OPEN`, `ACTIVE`, `READ WRITE`. La causa del error repetitivo fue aislada en AWR: `MMON_SLAVE / Auto-Flush Slave Action` fallaba durante `INSERT INTO wrh$_sql_plan` con `ORA-01578`, `ORA-01110` y `ORA-26040` sobre el bloque 76214 del datafile 2 (`SYSAUX`), perteneciente al LOB BasicFile `SYS.WRH$_SQL_PLAN.OTHER_XML`.
+**REPARACIÓN AWR/LOB EJECUTADA Y PRUEBA FUNCIONAL INICIAL EXITOSA.**
+
+Oracle `orcl` en la VM `kanela` continúa `OPEN`, `ACTIVE`, `READ WRITE`.
+
+La causa del error repetitivo quedó aislada en AWR: `MMON_SLAVE / Auto-Flush Slave Action` fallaba durante `INSERT INTO wrh$_sql_plan` con `ORA-01578`, `ORA-01110` y `ORA-26040` sobre bloques `NOLOGGING` del datafile 2 (`SYSAUX`) pertenecientes al LOB BasicFile `SYS.WRH$_SQL_PLAN.OTHER_XML`.
 
 ## Punto de retorno
 
-Existe un respaldo restaurable de la VM `kanela`. Se mantiene como punto de retorno hasta completar toda la validación posterior a la reparación.
+Existe un respaldo restaurable de la VM `kanela`. Mantenerlo hasta cerrar completamente la validación posterior.
 
-## AWR
+## Configuración AWR original y restaurada
 
-AWR está temporalmente pausado mediante:
+Configuración original:
+
+```text
+SNAP_INTERVAL  +00000 01:00:00.0
+RETENTION      +00008 00:00:00.0
+```
+
+Durante la reparación se pausó AWR con:
 
 ```sql
 exec dbms_workload_repository.modify_snapshot_settings(interval=>0);
 ```
 
-Estado confirmado:
+Se confirmó entonces:
 
 ```text
 SNAP_INTERVAL  +40150 00:00:00.0
 RETENTION      +00008 00:00:00.0
 ```
 
-No reactivar AWR hasta terminar la validación inicial del LOB y de los bloques antiguos.
+Después de las validaciones se reactivó AWR con:
 
-## Configuración del LOB antes de la reparación
+```sql
+exec dbms_workload_repository.modify_snapshot_settings(interval=>60);
+```
+
+Verificación posterior:
+
+```text
+SNAP_INTERVAL  +00000 01:00:00.0
+RETENTION      +00008 00:00:00.0
+```
+
+Por tanto AWR quedó restaurado a su funcionamiento automático de una hora con retención de ocho días.
+
+## LOB afectado antes de la reparación
 
 ```text
 TABLE          SYS.WRH$_SQL_PLAN
@@ -45,9 +69,9 @@ DB_SECUREFILE  PERMITTED
 SIZE LOB       ~19 MB
 ```
 
-`WRH$_SQL_PLAN` no está particionada.
+`WRH$_SQL_PLAN` no estaba particionada.
 
-## Espacio antes del cambio
+Espacio antes del cambio:
 
 ```text
 WRH$_SQL_PLAN                 17.00 MB
@@ -57,7 +81,7 @@ SYS_IL0000006213C00038$$       0.19 MB
 SYSAUX libre                  79.31 MB
 ```
 
-## Huella física previa al MOVE
+## Huella física previa
 
 ```text
 WRH$_SQL_PLAN
@@ -65,30 +89,27 @@ WRH$_SQL_PLAN
   DATA_OBJECT_ID  6213
   HEADER_FILE     2
   HEADER_BLOCK    4266
-  SIZE            17 MB
 
 SYS_LOB0000006213C00038$$
   OBJECT_ID       6214
   DATA_OBJECT_ID  6214
   HEADER_FILE     2
   HEADER_BLOCK    4274
-  SIZE            19 MB
 
 WRH$_SQL_PLAN_PK
   OBJECT_ID       6216
   DATA_OBJECT_ID  6216
   HEADER_FILE     2
   HEADER_BLOCK    4290
-  SIZE            9 MB
 ```
-
-Índices antes del cambio: `SYS_IL0000006213C00038$$` y `WRH$_SQL_PLAN_PK`, ambos `VALID`.
 
 ## MOVE LOB — EJECUTADO
 
-La recreación del LOB fue realizada. Aunque una entrada posterior en SQL*Plus produjo `ORA-00911` al concatenarse accidentalmente sentencias (`...;select...`) en una misma línea, las consultas de control demuestran de forma inequívoca que el `MOVE` sí se ejecutó.
+Se ejecutó la recreación/movimiento del LOB `OTHER_XML` en `SYSAUX`, conservándolo como BasicFile.
 
-### Huella física posterior
+Una entrada posterior mal concatenada en SQL*Plus produjo `ORA-00911`, pero fue solamente un error de entrada de comandos; las consultas de control demostraron que el `MOVE` se había ejecutado correctamente.
+
+Huella posterior:
 
 ```text
 SYS_LOB0000006213C00038$$
@@ -113,51 +134,80 @@ WRH$_SQL_PLAN_PK
   SIZE            9 MB
 ```
 
-Conclusión: la tabla y el LOB fueron físicamente recreados/movidos. Los `OBJECT_ID` lógicos permanecieron iguales, pero cambiaron los `DATA_OBJECT_ID` y los bloques de cabecera de la tabla y el LOB. La PK permaneció en su segmento físico original.
+Conclusión: tabla y LOB fueron físicamente recreados. Los `OBJECT_ID` lógicos se conservaron, mientras que los `DATA_OBJECT_ID` y bloques de cabecera de tabla/LOB cambiaron.
 
-### Índices después del MOVE
+Índices posteriores:
 
 ```text
 SYS_IL0000006213C00038$$   LOB     VALID   SYSAUX
 WRH$_SQL_PLAN_PK           NORMAL  VALID   SYSAUX
 ```
 
-No es necesario reconstruir nuevamente `WRH$_SQL_PLAN_PK` mientras permanezca `VALID`.
+La PK no necesitó nueva reconstrucción porque permaneció `VALID`.
 
-## Verificación de los cuatro bloques antiguos
+## Bloques NOLOGGING antiguos
 
-Se comprobó si los bloques históricos problemáticos continuaban perteneciendo a algún extent:
+Bloques históricos:
 
-```sql
-select b.block#,e.owner,e.segment_name,e.segment_type,e.block_id,e.blocks
-from (
-  select 76214 block# from dual
-  union all select 76228 from dual
-  union all select 76269 from dual
-  union all select 76273 from dual
-) b
-left join dba_extents e
-  on e.file_id=2
- and b.block# between e.block_id and e.block_id+e.blocks-1
-order by b.block#;
+```text
+76214
+76228
+76269
+76273
 ```
 
-Resultado: para los cuatro bloques (`76214`, `76228`, `76269`, `76273`) las columnas de `DBA_EXTENTS` quedaron nulas.
+Una consulta contra `DBA_EXTENTS` confirmó que los cuatro quedaron **sin asignación a ningún extent** después del `MOVE`. Por tanto ya no pertenecen al LOB nuevo ni a ningún segmento activo.
 
-Conclusión: los cuatro bloques antiguos ya no están asignados a ningún extent y, por tanto, ya no pertenecen al LOB nuevo ni a ningún otro segmento actualmente asignado. Este es un indicio fuerte de que el `MOVE LOB` liberó correctamente el espacio físico antiguo que contenía las marcas `NOLOGGING`.
+`V$DATABASE_BLOCK_CORRUPTION` continúa registrándolos como `NOLOGGING`, pero se trata ahora de bloques libres/no asignados.
+
+## RMAN post-reparación
+
+### VALIDATE DATAFILE 2
+
+Resultado:
+
+```text
+File Status Marked Corrupt Empty Blocks Blocks Examined
+2    OK     4              23492        156174
+
+Data   Blocks Failing 0
+Index  Blocks Failing 0
+Other  Blocks Failing 0
+```
+
+### VALIDATE CHECK LOGICAL DATAFILE 2
+
+Resultado igualmente limpio:
+
+```text
+File Status Marked Corrupt Empty Blocks Blocks Examined
+2    OK     4              23492        156174
+
+Data   Blocks Failing 0
+Index  Blocks Failing 0
+Other  Blocks Failing 0
+```
+
+Conclusión: el datafile 2 es físicamente y lógicamente legible; no hay bloques activos que fallen validación. Las cuatro marcas históricas permanecen sobre bloques ya no asignados.
+
+## Prueba funcional AWR
+
+Después de restaurar AWR a una hora se ejecutó:
+
+```sql
+exec dbms_workload_repository.create_snapshot();
+```
+
+El usuario reportó que la ejecución terminó correctamente (`todo bien`), sin error visible. Esto constituye una prueba funcional inicial positiva del flujo que antes fallaba durante el `INSERT INTO WRH$_SQL_PLAN`.
 
 ## Punto exacto de continuación
 
-AWR continúa pausado. Siguiente secuencia:
+Falta solamente cerrar la validación objetiva posterior al snapshot manual:
 
-1. consultar `V$DATABASE_BLOCK_CORRUPTION` para comprobar si Oracle todavía conserva las cuatro marcas históricas;
-2. ejecutar `RMAN VALIDATE DATAFILE 2`;
-3. volver a consultar `V$DATABASE_BLOCK_CORRUPTION`;
-4. ejecutar `RMAN VALIDATE CHECK LOGICAL DATAFILE 2` si todavía fuera necesario;
-5. confirmar la configuración actual del nuevo LOB;
-6. restaurar AWR a 60 minutos;
-7. generar un snapshot AWR de prueba;
-8. comprobar `alert_orcl.log` desde la reparación y verificar que no reaparezcan `ORA-01578`, `ORA-01110` ni `ORA-26040`.
+1. confirmar que se creó un nuevo `SNAP_ID` en `DBA_HIST_SNAPSHOT`;
+2. revisar el `alert_orcl.log` posterior a la reparación y confirmar ausencia de nuevas ocurrencias de `ORA-01578`, `ORA-01110` y `ORA-26040`;
+3. si ambas comprobaciones son limpias, marcar la reparación AWR/LOB como finalizada;
+4. conservar las cuatro marcas `NOLOGGING` como evidencia histórica mientras sigan asociadas únicamente a bloques libres/no asignados; no ejecutar `BLOCKRECOVER` sobre ellas.
 
 ## No ejecutar sin nueva evidencia
 
