@@ -71,20 +71,120 @@ Espacio conocido en la VM:
 
 El usuario confirmó que **ya existe un respaldo de la VM `kanela` y que es posible volver atrás en caso necesario**. Ese respaldo se toma como punto de retorno para esta reparación. Por tanto, no es necesario crear ahora otro backup local de 57.51 GB antes del DDL, siempre que se conserve ese respaldo hasta finalizar y validar la reparación.
 
+## Espacio y tamaño de los segmentos implicados
+
+Consulta realizada:
+
+```sql
+select segment_name,segment_type,round(bytes/1024/1024,2) mb
+from dba_segments
+where owner='SYS'
+  and segment_name in ('WRH$_SQL_PLAN','WRH$_SQL_PLAN_PK','SYS_LOB0000006213C00038$$','SYS_IL0000006213C00038$$')
+order by segment_type,segment_name;
+```
+
+Resultado:
+
+```text
+WRH$_SQL_PLAN_PK             INDEX       9.00 MB
+SYS_IL0000006213C00038$$     LOBINDEX    0.19 MB
+SYS_LOB0000006213C00038$$    LOBSEGMENT 19.00 MB
+WRH$_SQL_PLAN                TABLE      17.00 MB
+```
+
+Espacio libre en `SYSAUX`:
+
+```sql
+select round(sum(bytes)/1024/1024,2) free_mb
+from dba_free_space
+where tablespace_name='SYSAUX';
+```
+
+Resultado:
+
+```text
+FREE_MB = 79.31
+```
+
+Conclusión: existe margen suficiente en `SYSAUX` para crear un nuevo segmento LOB de ~19 MB sin ampliar el tablespace.
+
+## AWR temporalmente pausado
+
+Se ejecutó:
+
+```sql
+exec dbms_workload_repository.modify_snapshot_settings(interval=>0);
+```
+
+Verificación posterior:
+
+```sql
+select snap_interval,retention from dba_hist_wr_control;
+```
+
+Resultado:
+
+```text
+SNAP_INTERVAL  +40150 00:00:00.0
+RETENTION      +00008 00:00:00.0
+```
+
+Interpretación operativa: AWR quedó temporalmente deshabilitado; la retención continúa en 8 días. Mantener AWR pausado hasta terminar la recreación y validación inicial del LOB.
+
+## Parámetro `DB_SECUREFILE`
+
+Consulta:
+
+```sql
+select name,value from v$parameter where name='db_securefile';
+```
+
+Resultado:
+
+```text
+NAME           VALUE
+db_securefile  PERMITTED
+```
+
+Implicación: Oracle permite SecureFile, pero no lo fuerza. El LOB afectado actual es `SECUREFILE=NO` (BasicFile). La reparación debe preservar explícitamente el formato BasicFile para evitar una conversión implícita no deseada durante el `MOVE LOB`.
+
 ## Estrategia de reparación prevista
 
-Objetivo: recrear solamente el segmento LOB afectado de `SYS.WRH$_SQL_PLAN.OTHER_XML`, sin mover innecesariamente la tabla base.
+Objetivo: recrear solamente el segmento LOB afectado de `SYS.WRH$_SQL_PLAN.OTHER_XML`, sin mover innecesariamente la tabla base ni tocar datos de aplicación.
 
-Secuencia prevista, todavía no ejecutada:
+Secuencia prevista:
 
-1. Suspender temporalmente la generación automática de snapshots AWR para evitar que `MMON_SLAVE` intente insertar durante el cambio.
-2. Ejecutar un `ALTER TABLE ... MOVE LOB (OTHER_XML) STORE AS ...` manteniendo el LOB como BasicFile en `SYSAUX` y conservando las características necesarias.
-3. Confirmar que se creó un nuevo `SEGMENT_NAME`/`INDEX_NAME` para el LOB.
-4. Confirmar que `WRH$_SQL_PLAN_PK` sigue `VALID`; reconstruirlo solo si fuera necesario.
-5. Restaurar el intervalo AWR de 60 minutos.
-6. Crear un snapshot AWR de prueba.
-7. Revisar `alert_orcl.log` y el trace MMON.
-8. Ejecutar nuevamente `RMAN VALIDATE DATAFILE 2` y consultar `V$DATABASE_BLOCK_CORRUPTION`.
+1. AWR ya está temporalmente pausado.
+2. Ejecutar un `ALTER TABLE ... MOVE LOB (OTHER_XML) STORE AS BASICFILE ...` manteniendo el LOB en `SYSAUX` y recreando un nuevo segmento LOB/LOBINDEX.
+3. Confirmar que cambió el `SEGMENT_NAME` / `INDEX_NAME` del LOB.
+4. Confirmar que `WRH$_SQL_PLAN_PK` sigue `VALID`; reconstruirlo solo si realmente fuera necesario.
+5. Comprobar `V$DATABASE_BLOCK_CORRUPTION`.
+6. Ejecutar `RMAN VALIDATE DATAFILE 2` y `VALIDATE CHECK LOGICAL DATAFILE 2`.
+7. Restaurar el intervalo AWR a 60 minutos.
+8. Crear un snapshot AWR de prueba.
+9. Revisar `alert_orcl.log` desde el momento de la reparación para confirmar que no reaparecen `ORA-01578`, `ORA-01110` ni `ORA-26040`.
+
+## Punto exacto para continuar
+
+La reparación está detenida justo antes del DDL que recreará el LOB.
+
+Estado confirmado:
+
+```text
+AWR:                  pausado
+SNAP_INTERVAL:        +40150 00:00:00.0
+RETENTION:            8 días
+DB_SECUREFILE:        PERMITTED
+LOB actual:           BasicFile
+LOB tamaño:           ~19 MB
+SYSAUX libre:         79.31 MB
+WRH$_SQL_PLAN:        no particionada
+LOB index:            VALID
+WRH$_SQL_PLAN_PK:     VALID
+Respaldo VM:          disponible y restaurable
+```
+
+Siguiente acción: validar y ejecutar la sintaxis exacta del `MOVE LOB` para Oracle 11.2.0.1, preservando explícitamente `BASICFILE` y `TABLESPACE SYSAUX`.
 
 ## No ejecutar sin control
 
@@ -93,3 +193,4 @@ Secuencia prevista, todavía no ejecutada:
 - `DELETE` directo sobre `SYS.WRH$_*`
 - `RESETLOGS`
 - recreación de controlfiles
+- movimiento de la tabla completa `WRH$_SQL_PLAN`
