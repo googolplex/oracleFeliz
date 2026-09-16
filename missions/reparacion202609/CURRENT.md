@@ -13,7 +13,7 @@ missions/reparacion202609/capacity-20260916.md
 
 `HANDOFF.md` contiene el contexto consolidado de `zapallo`, KVM/libvirt, la VM `kanela`, CentOS 5.11, red/SSH, Oracle 11.2.0.1, datafiles, error AWR/LOB, reparación, RMAN, AWR, alert log y listener.
 
-`capacity-20260916.md` contiene la medición exacta de espacio de datafiles y filesystems y su interpretación operativa.
+`capacity-20260916.md` contiene la medición exacta de espacio, `AUTOEXTEND`, `INCREMENT_BY`, tipo `SMALLFILE/BIGFILE`, límites por datafile y espacio real de filesystems.
 
 ## Estado operativo actual
 
@@ -37,144 +37,71 @@ Listener:        FUNCIONANDO en 192.168.1.60
 
 Existe un respaldo restaurable de la VM `kanela`.
 
-## Listener
-
-Después de cambiar la red de la VM se detectó que `listener.ora` conservaba la IP antigua `192.168.0.60`.
-
-Se corrigió a:
-
-```text
-192.168.1.60
-```
-
-Archivo:
-
-```text
-/home/oracle/app/oracle/product/11.2.0/dbhome_1/network/admin/listener.ora
-```
-
-Se conservó/indicó backup `listener.ora.bak_20260916`, se reinició con `lsnrctl stop` / `lsnrctl start` y el usuario confirmó que el listener quedó funcionando correctamente.
-
 ## Reparación AWR/LOB
 
-La causa del error repetitivo era:
+Reparación completada con éxito. El fallo original era `MMON_SLAVE / Auto-Flush Slave Action -> INSERT INTO WRH$_SQL_PLAN -> ORA-01578 / ORA-01110 / ORA-26040` sobre el LOB `SYS.WRH$_SQL_PLAN.OTHER_XML` en `SYSAUX`.
 
-```text
-MMON_SLAVE / Auto-Flush Slave Action
-INSERT INTO WRH$_SQL_PLAN
-ORA-01578
-ORA-01110
-ORA-26040
-file 2 / SYSAUX
-LOB SYS.WRH$_SQL_PLAN.OTHER_XML
-```
+El LOB fue recreado, ambos índices quedaron `VALID`, los cuatro bloques históricos `NOLOGGING` quedaron fuera de cualquier extent activo y RMAN confirmó `Blocks Failing = 0` tanto en `VALIDATE DATAFILE 2` como en `VALIDATE CHECK LOGICAL DATAFILE 2`.
 
-Bloques históricos `NOLOGGING`:
+AWR quedó restaurado a una hora / ocho días y el snapshot manual de prueba `SNAP_ID 130356` se creó correctamente.
 
-```text
-76214
-76228
-76269
-76273
-```
+El `alert_orcl.log` histórico de ~541 MB fue archivado/comprimido y el archivo activo quedó operativo.
 
-Se pausó AWR, se recreó físicamente el LOB BasicFile mediante `MOVE LOB`, se validaron los índices y se confirmó que los cuatro bloques antiguos quedaron fuera de cualquier extent activo.
+## Listener
 
-Huella posterior relevante:
+`listener.ora` apuntaba a la IP antigua `192.168.0.60`. Fue corregido a `192.168.1.60`, se reinició el listener y el usuario confirmó que quedó funcionando correctamente.
 
-```text
-WRH$_SQL_PLAN                DATA_OBJECT_ID 658559 HEADER_BLOCK 99546
-SYS_LOB0000006213C00038$$    DATA_OBJECT_ID 658560 HEADER_BLOCK 99522
-WRH$_SQL_PLAN_PK             DATA_OBJECT_ID 6216   HEADER_BLOCK 4290
-```
+## Capacidad de almacenamiento — VERIFICADA
 
-Índices:
-
-```text
-SYS_IL0000006213C00038$$   VALID
-WRH$_SQL_PLAN_PK           VALID
-```
-
-## RMAN
-
-Después de la reparación:
-
-```text
-VALIDATE DATAFILE 2
-File Status = OK
-Blocks Failing Data  = 0
-Blocks Failing Index = 0
-Blocks Failing Other = 0
-```
-
-`VALIDATE CHECK LOGICAL DATAFILE 2` también reportó `Blocks Failing = 0`.
-
-Las cuatro entradas `NOLOGGING` pueden seguir figurando en `V$DATABASE_BLOCK_CORRUPTION`, pero están sobre bloques libres/no asignados. No ejecutar `BLOCKRECOVER` sobre ellas sin evidencia nueva.
-
-## AWR
-
-Estado final restaurado:
-
-```text
-SNAP_INTERVAL +00000 01:00:00.0
-RETENTION     +00008 00:00:00.0
-```
-
-Snapshot manual de prueba exitoso:
-
-```text
-SNAP_ID 130356
-BEGIN 16-SEP-26 12.08.23.777 PM
-END   16-SEP-26 12.08.50.674 PM
-```
-
-## Alert log
-
-El `alert_orcl.log`, que había alcanzado aproximadamente 541 MB, fue archivado y comprimido; el archivo activo fue truncado conservando el mismo archivo y Oracle continuó escribiendo normalmente después de `alter system switch logfile`.
-
-## Capacidad actual de datafiles
-
-Medición confirmada:
-
-```text
-FILE  TABLESPACE  SIZE_MB   USED_MB   FREE_MB   USED%   AUTOEXT  MAX_MB
-1     SYSTEM       1190.00   1183.63      6.38   99.46   YES      32767.98
-2     SYSAUX       1220.00   1105.88    114.13   90.65   YES      32767.98
-3     UNDOTBS1    13370.00     26.75  13343.25    0.20   YES      32767.98
-4     USERS           5.00      4.06      0.94   81.25   YES      32767.98
-5     EXAMPLE        100.00     78.44     21.56   78.44   YES      32767.98
-6     TABLAS       32767.98  14491.67  18276.31   44.23   YES      32767.98
-7     AMANDA       10240.00    103.44  10136.56    1.01   YES      32767.98
-```
-
-Filesystems actuales:
+### Filesystems
 
 ```text
 /          102G total, 75G usados, 23G libres, 77% usado
 /ciruelas   98G total, 43G usados, 51G libres, 46% usado
 ```
 
-### Interpretación
+### Datafiles y espacio libre interno
 
-- No existe una emergencia general de espacio.
-- `SYSTEM` tiene solo 6.38 MB libres dentro de su tamaño actual y depende de `AUTOEXTEND`; vigilar.
-- `SYSAUX` tiene 114.13 MB libres internos y también depende de `AUTOEXTEND`; vigilar.
-- Los datafiles alojados en `/` tienen un `MAXBYTES` teórico de ~32 GB por archivo, pero el margen físico conjunto real está limitado por los 23 GB libres del filesystem raíz y por el crecimiento del propio sistema operativo/ADR/logs.
-- `UNDOTBS1` tiene ~13.34 GB libres internos y no presenta presión.
-- `TABLAS` ya alcanzó el máximo individual del archivo (~32 GB), por lo que ese archivo no puede crecer más; sin embargo, conserva 18.28 GB libres internos (44.23% usado), por lo que no requiere ampliación ahora.
-- `/ciruelas` conserva 51 GB físicos libres; `AMANDA` tiene ~10.14 GB libres internos y margen cómodo.
+```text
+SYSTEM     1190.00 MB total,     6.38 MB libres, 99.46% usado
+SYSAUX     1220.00 MB total,   114.13 MB libres, 90.65% usado
+UNDOTBS1  13370.00 MB total, 13343.25 MB libres,  0.20% usado
+USERS         5.00 MB total,     0.94 MB libres, 81.25% usado
+EXAMPLE      100.00 MB total,    21.56 MB libres, 78.44% usado
+TABLAS     32767.98 MB total, 18276.31 MB libres, 44.23% usado
+AMANDA     10240.00 MB total, 10136.56 MB libres,  1.01% usado
+```
 
-Detalle completo en `capacity-20260916.md`.
+Todos los tablespaces consultados son `SMALLFILE` (`BIGFILE=NO`), bloque de 8192 bytes.
 
-## Próximo control recomendado
+### AUTOEXTEND real
 
-Antes de cambiar tamaños o agregar datafiles, consultar:
+```text
+SYSTEM     NEXT 10.00 MB
+SYSAUX     NEXT 10.00 MB
+UNDOTBS1   NEXT  5.00 MB
+USERS      NEXT  1.25 MB
+EXAMPLE    NEXT  0.63 MB
+TABLAS     NEXT 10 GB configurado, pero archivo ya en MAXBYTES
+AMANDA     NEXT  2 GB
+```
 
-1. `INCREMENT_BY` de cada datafile autoextensible;
-2. tipo de tablespace `SMALLFILE`/`BIGFILE`, especialmente `TABLAS`;
-3. crecimiento histórico si se desea estimar horizonte de capacidad.
+### Interpretación final
 
-No ampliar ni reducir datafiles todavía.
+- No hace falta ampliar ningún datafile ahora.
+- `SYSTEM` requiere vigilancia porque solo tiene 6.38 MB libres internos, pero crece automáticamente en pasos de 10 MB y `/` todavía dispone de 23 GB físicos libres compartidos.
+- `SYSAUX` tiene 114.13 MB libres internos y autoextend de 10 MB.
+- `UNDOTBS1` está ampliamente sobredimensionado respecto del uso actual; no reducir sin estudiar high-water mark y uso real de UNDO.
+- `TABLAS` es `SMALLFILE`, su datafile ya está en ~32 GB, exactamente su `MAXBYTES`, por lo que no puede crecer más aunque `AUTOEXTENSIBLE=YES`. Sin embargo, todavía tiene 18.28 GB libres internos.
+- Si `TABLAS` se acercara a agotarse, la acción correcta sería agregar un segundo datafile en `/ciruelas`, no intentar ampliar el archivo actual.
+- `AMANDA` tiene margen muy amplio.
+- `/ciruelas` dispone de 51 GB libres físicos.
+
+Detalle completo: `missions/reparacion202609/capacity-20260916.md`.
+
+## Estado de la misión
+
+La reparación está cerrada. La capacidad fue revisada y no requiere cambios inmediatos. En futuras sesiones, empezar por `HANDOFF.md`, `CURRENT.md` y `capacity-20260916.md`; no es necesario volver a reconstruir el contexto histórico.
 
 ## No ejecutar sin nueva evidencia
 
@@ -185,3 +112,4 @@ No ampliar ni reducir datafiles todavía.
 - `RESETLOGS`
 - recreación de controlfiles
 - repetir el `MOVE LOB` sin necesidad
+- ampliar/reducir datafiles sin una nueva medición de espacio y crecimiento
