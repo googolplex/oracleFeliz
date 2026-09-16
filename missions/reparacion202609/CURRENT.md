@@ -44,17 +44,11 @@ Oldest online log sequence  15540
 Current log sequence        15542
 ```
 
-Conclusión: cualquier backup Oracle previo al DDL debe ser consistente. No hacer backup abierto de la base asumiendo que será recuperable. En NOARCHIVELOG, un backup RMAN válido debe hacerse después de shutdown consistente y con la base montada.
-
 ## Tamaño de la base
 
-Total de datafiles:
+Total de datafiles: `57.51 GB`.
 
-```text
-57.51 GB
-```
-
-Detalle:
+Datafiles relevantes:
 
 ```text
 1  /home/oracle/app/oracle/oradata/orcl/system01.dbf    1.16 GB
@@ -66,34 +60,36 @@ Detalle:
 7  /ciruelas/oradata/amada.dbf                        10.00 GB
 ```
 
-`sysaux01.dbf` tiene 1220 MB y estado `AVAILABLE`.
-
-## Espacio disponible en la VM
+Espacio conocido en la VM:
 
 ```text
 /          23 GB libres
 /ciruelas  51 GB libres
 ```
 
-El total de 57.51 GB no cabe sin más en `/ciruelas`; por tanto no usar `/ciruelas` como único destino de un backup completo sin comprobar compresión y margen adicional.
+## Punto de retorno
 
-## Estrategia de seguridad elegida antes del DDL
+El usuario confirmó que **ya existe un respaldo de la VM `kanela` y que es posible volver atrás en caso necesario**. Ese respaldo se toma como punto de retorno para esta reparación. Por tanto, no es necesario crear ahora otro backup local de 57.51 GB antes del DDL, siempre que se conserve ese respaldo hasta finalizar y validar la reparación.
 
-Como `kanela` es una VM libvirt/KVM alojada en `zapallo`, la opción preferida es inspeccionar y, si hay espacio suficiente, realizar un respaldo en frío a nivel de los discos virtuales con la VM apagada limpiamente. Deben respaldarse todos los discos de la VM, porque los datafiles están repartidos entre `/home/oracle/...` y `/ciruelas/...`.
+## Estrategia de reparación prevista
 
-Antes de apagar nada, ejecutar en `zapallo`:
+Objetivo: recrear solamente el segmento LOB afectado de `SYS.WRH$_SQL_PLAN.OTHER_XML`, sin mover innecesariamente la tabla base.
 
-```bash
-sudo virsh domblklist kanela --details
-df -hT
-```
+Secuencia prevista, todavía no ejecutada:
 
-Con esa salida se decidirá el método exacto de copia según los discos sean archivos, volúmenes LVM u otro tipo, y según el espacio disponible en el host.
+1. Suspender temporalmente la generación automática de snapshots AWR para evitar que `MMON_SLAVE` intente insertar durante el cambio.
+2. Ejecutar un `ALTER TABLE ... MOVE LOB (OTHER_XML) STORE AS ...` manteniendo el LOB como BasicFile en `SYSAUX` y conservando las características necesarias.
+3. Confirmar que se creó un nuevo `SEGMENT_NAME`/`INDEX_NAME` para el LOB.
+4. Confirmar que `WRH$_SQL_PLAN_PK` sigue `VALID`; reconstruirlo solo si fuera necesario.
+5. Restaurar el intervalo AWR de 60 minutos.
+6. Crear un snapshot AWR de prueba.
+7. Revisar `alert_orcl.log` y el trace MMON.
+8. Ejecutar nuevamente `RMAN VALIDATE DATAFILE 2` y consultar `V$DATABASE_BLOCK_CORRUPTION`.
 
-## No ejecutar todavía
+## No ejecutar sin control
 
-- `ALTER TABLE SYS.WRH$_SQL_PLAN MOVE LOB (OTHER_XML) ...`
 - `BLOCKRECOVER`
 - `DROP_SNAPSHOT_RANGE`
 - `DELETE` directo sobre `SYS.WRH$_*`
-- apagado de la VM hasta definir el backup en `zapallo`
+- `RESETLOGS`
+- recreación de controlfiles
