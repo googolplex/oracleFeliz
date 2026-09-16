@@ -2,152 +2,75 @@
 
 Fecha: 2026-09-16
 
-## Estado
+## Documento de continuidad
 
-**REPARACIÓN AWR/LOB COMPLETADA Y VALIDADA FUNCIONALMENTE.**
-
-Oracle `orcl` en la VM `kanela` continúa `OPEN`, `ACTIVE`, `READ WRITE`.
-
-La causa del error repetitivo quedó aislada en AWR: `MMON_SLAVE / Auto-Flush Slave Action` fallaba durante `INSERT INTO wrh$_sql_plan` con `ORA-01578`, `ORA-01110` y `ORA-26040` sobre bloques `NOLOGGING` del datafile 2 (`SYSAUX`) pertenecientes al LOB BasicFile `SYS.WRH$_SQL_PLAN.OTHER_XML`.
-
-## Punto de retorno
-
-Existe un respaldo restaurable de la VM `kanela`. Puede conservarse como punto de retorno histórico de esta intervención.
-
-## Configuración AWR original y restaurada
-
-Configuración original:
+Para retomar esta misión sin reconstruir el contexto, leer primero:
 
 ```text
-SNAP_INTERVAL  +00000 01:00:00.0
-RETENTION      +00008 00:00:00.0
+missions/reparacion202609/HANDOFF.md
 ```
 
-Durante la reparación se pausó AWR con:
+Ese archivo contiene el detalle consolidado de `zapallo`, KVM/libvirt, la VM `kanela`, CentOS 5.11, red/SSH, Oracle 11.2.0.1, datafiles, error AWR/LOB, reparación, RMAN, AWR, alert log y listener.
 
-```sql
-exec dbms_workload_repository.modify_snapshot_settings(interval=>0);
-```
+## Estado operativo actual
 
-Se confirmó entonces:
+**REPARACIÓN COMPLETADA Y ORACLE OPERATIVO.**
 
 ```text
-SNAP_INTERVAL  +40150 00:00:00.0
-RETENTION      +00008 00:00:00.0
+Host KVM:        zapallo
+IP zapallo:      192.168.1.71
+VM Oracle:       kanela
+SO kanela:       CentOS 5.11
+IP kanela:       192.168.1.60
+Gateway:         192.168.1.1
+ORACLE_SID:      orcl
+ORACLE_HOME:     /home/oracle/app/oracle/product/11.2.0/dbhome_1
+Oracle:          11.2.0.1.0 64-bit
+Instance:        OPEN / ACTIVE
+Database ORCL:   READ WRITE
+Archive mode:    NOARCHIVELOG
+Listener:        FUNCIONANDO en la red actual de kanela
 ```
 
-Después de las validaciones se reactivó AWR con:
+Existe un respaldo restaurable de la VM `kanela`.
 
-```sql
-exec dbms_workload_repository.modify_snapshot_settings(interval=>60);
-```
+## Listener
 
-Verificación posterior:
+Después de cambiar la red de la VM se detectó que `listener.ora` conservaba la IP antigua:
 
 ```text
-SNAP_INTERVAL  +00000 01:00:00.0
-RETENTION      +00008 00:00:00.0
+192.168.0.60
 ```
 
-Por tanto AWR quedó restaurado a su funcionamiento automático de una hora con retención de ocho días.
-
-## LOB afectado antes de la reparación
+Se corrigió a:
 
 ```text
-TABLE          SYS.WRH$_SQL_PLAN
-COLUMN         OTHER_XML
-SEGMENT        SYS_LOB0000006213C00038$$
-LOB INDEX      SYS_IL0000006213C00038$$
-TABLESPACE     SYSAUX
-CHUNK          8192
-RETENTION      900
-CACHE          NO
-LOGGING        YES
-IN_ROW         YES
-SECUREFILE     NO
-DB_SECUREFILE  PERMITTED
-SIZE LOB       ~19 MB
+192.168.1.60
 ```
 
-`WRH$_SQL_PLAN` no estaba particionada.
-
-Espacio antes del cambio:
+Archivo:
 
 ```text
-WRH$_SQL_PLAN                 17.00 MB
-WRH$_SQL_PLAN_PK               9.00 MB
-SYS_LOB0000006213C00038$$     19.00 MB
-SYS_IL0000006213C00038$$       0.19 MB
-SYSAUX libre                  79.31 MB
+/home/oracle/app/oracle/product/11.2.0/dbhome_1/network/admin/listener.ora
 ```
 
-## Huella física previa
+Se indicó conservar backup `listener.ora.bak_20260916`, reiniciar con `lsnrctl stop` / `lsnrctl start` y verificar con `lsnrctl status`. El usuario confirmó que el listener quedó funcionando correctamente.
+
+## Reparación AWR/LOB
+
+La causa del error repetitivo era:
 
 ```text
-WRH$_SQL_PLAN
-  OBJECT_ID       6213
-  DATA_OBJECT_ID  6213
-  HEADER_FILE     2
-  HEADER_BLOCK    4266
-
-SYS_LOB0000006213C00038$$
-  OBJECT_ID       6214
-  DATA_OBJECT_ID  6214
-  HEADER_FILE     2
-  HEADER_BLOCK    4274
-
-WRH$_SQL_PLAN_PK
-  OBJECT_ID       6216
-  DATA_OBJECT_ID  6216
-  HEADER_FILE     2
-  HEADER_BLOCK    4290
+MMON_SLAVE / Auto-Flush Slave Action
+INSERT INTO WRH$_SQL_PLAN
+ORA-01578
+ORA-01110
+ORA-26040
+file 2 / SYSAUX
+LOB SYS.WRH$_SQL_PLAN.OTHER_XML
 ```
 
-## MOVE LOB — EJECUTADO
-
-Se ejecutó la recreación/movimiento del LOB `OTHER_XML` en `SYSAUX`, conservándolo como BasicFile.
-
-Una entrada posterior mal concatenada en SQL*Plus produjo `ORA-00911`, pero fue solamente un error de entrada de comandos; las consultas de control demostraron que el `MOVE` se había ejecutado correctamente.
-
-Huella posterior:
-
-```text
-SYS_LOB0000006213C00038$$
-  OBJECT_ID       6214
-  DATA_OBJECT_ID  658560
-  HEADER_FILE     2
-  HEADER_BLOCK    99522
-  SIZE            0.06 MB
-
-WRH$_SQL_PLAN
-  OBJECT_ID       6213
-  DATA_OBJECT_ID  658559
-  HEADER_FILE     2
-  HEADER_BLOCK    99546
-  SIZE            0.06 MB
-
-WRH$_SQL_PLAN_PK
-  OBJECT_ID       6216
-  DATA_OBJECT_ID  6216
-  HEADER_FILE     2
-  HEADER_BLOCK    4290
-  SIZE            9 MB
-```
-
-Conclusión: tabla y LOB fueron físicamente recreados. Los `OBJECT_ID` lógicos se conservaron, mientras que los `DATA_OBJECT_ID` y bloques de cabecera de tabla/LOB cambiaron.
-
-Índices posteriores:
-
-```text
-SYS_IL0000006213C00038$$   LOB     VALID   SYSAUX
-WRH$_SQL_PLAN_PK           NORMAL  VALID   SYSAUX
-```
-
-La PK no necesitó nueva reconstrucción porque permaneció `VALID`.
-
-## Bloques NOLOGGING antiguos
-
-Bloques históricos:
+Bloques históricos `NOLOGGING`:
 
 ```text
 76214
@@ -156,102 +79,91 @@ Bloques históricos:
 76273
 ```
 
-Una consulta contra `DBA_EXTENTS` confirmó que los cuatro quedaron **sin asignación a ningún extent** después del `MOVE`. Por tanto ya no pertenecen al LOB nuevo ni a ningún segmento activo.
+Se pausó AWR, se recreó físicamente el LOB BasicFile mediante `MOVE LOB`, se validaron los índices y se confirmó que los cuatro bloques antiguos quedaron fuera de cualquier extent activo.
 
-`V$DATABASE_BLOCK_CORRUPTION` continúa registrándolos como `NOLOGGING`, pero se trata ahora de bloques libres/no asignados. No ejecutar `BLOCKRECOVER` sobre ellos sin nueva evidencia.
-
-## RMAN post-reparación
-
-### VALIDATE DATAFILE 2
-
-Resultado:
+Huella posterior relevante:
 
 ```text
-File Status Marked Corrupt Empty Blocks Blocks Examined
-2    OK     4              23492        156174
-
-Data   Blocks Failing 0
-Index  Blocks Failing 0
-Other  Blocks Failing 0
+WRH$_SQL_PLAN                DATA_OBJECT_ID 658559 HEADER_BLOCK 99546
+SYS_LOB0000006213C00038$$    DATA_OBJECT_ID 658560 HEADER_BLOCK 99522
+WRH$_SQL_PLAN_PK             DATA_OBJECT_ID 6216   HEADER_BLOCK 4290
 ```
 
-### VALIDATE CHECK LOGICAL DATAFILE 2
-
-Resultado igualmente limpio:
+Índices:
 
 ```text
-File Status Marked Corrupt Empty Blocks Blocks Examined
-2    OK     4              23492        156174
-
-Data   Blocks Failing 0
-Index  Blocks Failing 0
-Other  Blocks Failing 0
+SYS_IL0000006213C00038$$   VALID
+WRH$_SQL_PLAN_PK           VALID
 ```
 
-Conclusión: el datafile 2 es físicamente y lógicamente legible; no hay bloques activos que fallen validación. Las cuatro marcas históricas permanecen sobre bloques ya no asignados.
+## RMAN
 
-## Prueba funcional AWR — EXITOSA
+Después de la reparación:
 
-Después de restaurar AWR a una hora se ejecutó:
-
-```sql
-exec dbms_workload_repository.create_snapshot();
+```text
+VALIDATE DATAFILE 2
+File Status = OK
+Blocks Failing Data  = 0
+Blocks Failing Index = 0
+Blocks Failing Other = 0
 ```
 
-La ejecución terminó correctamente.
+`VALIDATE CHECK LOGICAL DATAFILE 2` también reportó `Blocks Failing = 0`.
 
-Verificación objetiva posterior en `DBA_HIST_SNAPSHOT`:
+Las cuatro entradas `NOLOGGING` pueden seguir figurando en `V$DATABASE_BLOCK_CORRUPTION`, pero están sobre bloques libres/no asignados. No ejecutar `BLOCKRECOVER` sobre ellas sin evidencia nueva.
+
+## AWR
+
+Estado final restaurado:
+
+```text
+SNAP_INTERVAL +00000 01:00:00.0
+RETENTION     +00008 00:00:00.0
+```
+
+Snapshot manual de prueba exitoso:
 
 ```text
 SNAP_ID 130356
-BEGIN_INTERVAL_TIME 16-SEP-26 12.08.23.777 PM
-END_INTERVAL_TIME   16-SEP-26 12.08.50.674 PM
-
-SNAP_ID 130355
-BEGIN_INTERVAL_TIME 16-SEP-26 11.00.21.748 AM
-END_INTERVAL_TIME   16-SEP-26 12.08.23.777 PM
-
-SNAP_ID 130354
-BEGIN_INTERVAL_TIME 16-SEP-26 10.41.16.000 AM
-END_INTERVAL_TIME   16-SEP-26 11.00.21.748 AM
+BEGIN 16-SEP-26 12.08.23.777 PM
+END   16-SEP-26 12.08.50.674 PM
 ```
 
-El nuevo `SNAP_ID 130356` confirma que AWR volvió a completar correctamente el flujo de snapshot que antes fallaba en `WRH$_SQL_PLAN`.
+## Alert log
 
-## Limpieza / rotación del `alert_orcl.log`
+El `alert_orcl.log`, que había alcanzado aproximadamente 541 MB, fue archivado y comprimido; el archivo activo fue truncado conservando el mismo archivo y Oracle continuó escribiendo normalmente después de `alter system switch logfile`.
 
-El `alert_orcl.log` histórico había crecido hasta aproximadamente 541 MB.
+## Datafiles conocidos
 
-Se realizó una rotación manual conservadora manteniendo el archivo activo:
+Tamaño total observado: aproximadamente `57.51 GB`.
 
-```bash
-cd /home/oracle/app/oracle/diag/rdbms/orcl/orcl/trace
-cp -p alert_orcl.log alert_orcl_20260916_pre_limpieza.log
-gzip alert_orcl_20260916_pre_limpieza.log
-: > alert_orcl.log
+```text
+1 /home/oracle/app/oracle/oradata/orcl/system01.dbf     ~1.16 GB
+2 /home/oracle/app/oracle/oradata/orcl/sysaux01.dbf    ~1.19 GB
+3 /home/oracle/app/oracle/oradata/orcl/undotbs01.dbf  ~13.06 GB
+4 /home/oracle/app/oracle/oradata/orcl/users01.dbf      pequeño
+5 /home/oracle/app/oracle/oradata/orcl/example01.dbf   ~0.10 GB
+6 /ciruelas/oradata/tablas                             ~32 GB
+7 /ciruelas/oradata/amada.dbf                          ~10 GB
 ```
 
-Después se forzó una escritura Oracle con:
+Último espacio de filesystem conocido:
 
-```sql
-alter system switch logfile;
+```text
+/          23 GB libres
+/ciruelas  51 GB libres
 ```
 
-El usuario confirmó que la operación terminó correctamente y que el nuevo `alert_orcl.log` siguió recibiendo escritura normal. La historia previa quedó preservada en el archivo comprimido.
+## Próxima tarea
 
-## Resultado final
+Revisar capacidad real de los datafiles y tablespaces:
 
-La reparación puede considerarse **cerrada con éxito**:
-
-- Oracle abre y permanece `OPEN`, `ACTIVE`, `READ WRITE`;
-- AWR vuelve a operar cada 60 minutos;
-- retención AWR permanece en 8 días;
-- el LOB problemático fue físicamente recreado;
-- índices involucrados permanecen `VALID`;
-- los bloques históricos `NOLOGGING` quedaron fuera de cualquier extent activo;
-- `VALIDATE DATAFILE 2` y `VALIDATE CHECK LOGICAL DATAFILE 2` reportan `Blocks Failing = 0`;
-- el snapshot manual AWR generó correctamente el `SNAP_ID 130356`;
-- el `alert_orcl.log` histórico fue archivado/comprimido y el archivo activo fue reiniciado correctamente.
+1. tamaño actual;
+2. espacio usado y libre;
+3. porcentaje utilizado;
+4. `AUTOEXTENSIBLE`;
+5. `MAXBYTES` / margen potencial;
+6. comprobar simultáneamente espacio real de `/` y `/ciruelas`.
 
 ## No ejecutar sin nueva evidencia
 
