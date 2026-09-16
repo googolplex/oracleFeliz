@@ -24,4 +24,7 @@
 - Para SSH desde `zapallo` a `kanela`, CentOS 5 requiere compatibilidad con `diffie-hellman-group14-sha1`; se configuró acceso por clave para evitar contraseña repetida.
 
 ## Regla de continuidad
-- Antes de continuar una reparación de Oracle, leer `missions/kanela-orcl/mission-01-recovery.md` y continuar desde el punto exacto documentado allí, sin pedir nuevamente contexto ya registrado.
+- La misión maestra actual es `missions/reparacion202609/mission.md`.
+- Antes de continuar esta reparación de Oracle, leer `missions/reparacion202609/mission.md` y continuar desde el punto exacto documentado allí, sin pedir nuevamente contexto ya registrado.
+- La misión anterior `missions/kanela-orcl/mission-01-recovery.md` queda como antecedente histórico; no usarla como punto de continuidad si existe información más reciente en `reparacion202609`.
+- Registrar en `missions/reparacion202609/mission.md` los nuevos hallazgos, cambios ejecutados, validaciones y estado final de la reparación.
