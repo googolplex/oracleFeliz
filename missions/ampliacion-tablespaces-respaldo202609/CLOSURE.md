@@ -78,42 +78,41 @@ No se debe inferir que todo ese espacio sea inmediatamente reducible: para devol
 
 ## Diagnóstico de `UNDOTBS1`
 
-El usuario priorizó revisar `UNDOTBS1` antes que `AMANDA`.
-
-Consulta de HWM ejecutada sobre el datafile 3:
+Datafile:
 
 ```text
-FILE_ID       3
-FILE_NAME     /home/oracle/app/oracle/oradata/orcl/undotbs01.dbf
-CURRENT_MB    13370
-HWM_MB        427
-POTENTIAL_RECLAIM_MB 12943
+FILE_ID 3
+/home/oracle/app/oracle/oradata/orcl/undotbs01.dbf
+CURRENT_MB            13370
+HWM_MB                  427
+POTENTIAL_RECLAIM_MB  12943
 ```
+
+La distribución actual de extents de undo es:
+
+```text
+STATUS      EXTENTS   MB
+EXPIRED          33   6.75
+UNEXPIRED        14  21.00
+```
+
+No se observan extents `ACTIVE`.
 
 Interpretación:
 
-- el datafile físico mide **13.370 MB**;
-- el último bloque actualmente asignado está alrededor de **427 MB**;
-- existen **12.943 MB** (~12,64 GiB) por encima del HWM;
-- ese espacio es candidato real a ser devuelto al filesystem mediante `ALTER DATABASE ... DATAFILE ... RESIZE`, pero todavía no se ejecuta;
-- al tratarse del undo tablespace activo, antes del `RESIZE` se verificará la distribución de extents `ACTIVE`, `UNEXPIRED` y `EXPIRED` y se dejará margen por encima del HWM.
+- el datafile está fuertemente sobredimensionado para el uso actual;
+- el HWM está en solo **427 MB**;
+- no existen extents de undo activos al momento de la consulta;
+- solo existen **21 MB UNEXPIRED** y **6,75 MB EXPIRED**;
+- un objetivo conservador de **1024 MB (1 GiB)** queda muy por encima del HWM observado y dejaría margen amplio;
+- reducir de 13.370 MB a 1.024 MB devolvería aproximadamente **12.346 MB (~12,06 GiB)** al filesystem, sujeto a que Oracle acepte el `RESIZE` y no exista un cambio concurrente en el HWM.
 
-Oracle 11g soporta el redimensionamiento de datafiles de un undo tablespace mediante `ALTER DATABASE ... DATAFILE ... RESIZE`. La vista `DBA_UNDO_EXTENTS` informa el estado `ACTIVE`, `UNEXPIRED` o `EXPIRED` de los extents.
-
-## Siguiente diagnóstico autorizado
-
-Medir la distribución actual del undo por estado:
-
-```sql
-SELECT status, COUNT(*) extents, ROUND(SUM(bytes)/1024/1024,2) mb FROM dba_undo_extents WHERE tablespace_name='UNDOTBS1' GROUP BY status ORDER BY status;
-```
-
-No ejecutar todavía `RESIZE`.
+Oracle 11g permite redimensionar datafiles de undo con `ALTER DATABASE ... DATAFILE ... RESIZE`; si existieran bloques asignados por encima del tamaño solicitado, Oracle rechazaría la operación.
 
 ## Acciones explícitamente no realizadas todavía
 
 - no ampliar `TABLAS`;
-- no reducir datafiles aún;
+- no reducir datafiles todavía;
 - no mover `AUD$`;
 - no ejecutar `DBMS_AUDIT_MGMT.INIT_CLEANUP`;
 - no ejecutar `NOAUDIT`;
@@ -126,4 +125,4 @@ No ejecutar todavía `RESIZE`.
 
 **BASE RECUPERADA / FASE DE LIBERACIÓN DE ESPACIO ABIERTA.**
 
-La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, y `UNDOTBS1` presenta ahora un potencial medido de **12.943 MB** (~12,64 GiB) por encima de su HWM, sujeto a una última verificación de estado de extents antes de redimensionar.
+La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, y `UNDOTBS1` fue identificado como candidato fuerte para devolver alrededor de **12,06 GiB** físicos al filesystem mediante un `RESIZE` conservador a 1 GiB, previa ejecución controlada.
