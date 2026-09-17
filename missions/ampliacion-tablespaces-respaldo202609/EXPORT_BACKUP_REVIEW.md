@@ -48,7 +48,7 @@ El mecanismo usa el utilitario clásico de Oracle:
 exp ... parfile=/home/oracle/exportar_kanela_full_v2.sql
 ```
 
-Por tanto, se trata de **Oracle Export clásico (`exp`)**, no Data Pump (`expdp`). Aún falta inspeccionar el `parfile` para confirmar los parámetros exactos y verificar si efectivamente contiene `FULL=Y`.
+Por tanto, se trata de **Oracle Export clásico (`exp`)**, no Data Pump (`expdp`).
 
 ### Flujo de almacenamiento
 
@@ -85,11 +85,32 @@ El control de éxito es simple:
 - la decisión de copiar se basa en la existencia del archivo `.dmp`;
 - la salida completa del cron queda redirigida a `/home/oracle/exportar_kanela_full_v2.log`.
 
-Por tanto, para evaluar la calidad histórica real de los exports será útil revisar posteriormente el `parfile`, el log del cron y los `.dmp` que aún existan en los destinos.
+Por tanto, para evaluar la calidad histórica real de los exports será útil revisar el log del cron y los `.dmp` que aún existan en los destinos.
 
 ### Credenciales
 
 El script contiene una credencial Oracle embebida en texto plano dentro de la invocación de `exp`. **La credencial no se copia ni se documenta en GitHub.** Este hallazgo se registra únicamente como una debilidad histórica de seguridad del script.
+
+## Parfile `exportar_kanela_full_v2.sql`
+
+Se inspeccionó el archivo en modo solo lectura y contiene:
+
+```text
+full=y
+file=/picornavirales/export_kanela_full.dmp
+grants=y
+rows=y
+```
+
+Esto confirma:
+
+- `FULL=Y`: el objetivo era un **export lógico completo**;
+- `ROWS=Y`: se incluían los datos de las tablas;
+- `GRANTS=Y`: se incluían los grants exportables;
+- el dump se generaba como `/picornavirales/export_kanela_full.dmp`, coincidiendo con el flujo del script;
+- no se observan parámetros adicionales en el parfile para consistencia, compresión, buffers u otras opciones explícitas.
+
+La ausencia de un parámetro explícito de consistencia queda anotada para evaluación técnica posterior; no se infiere todavía el comportamiento efectivo sin contrastarlo con la semántica exacta de `exp` en Oracle 11g y con los logs históricos.
 
 ## Lectura arquitectónica
 
@@ -104,4 +125,4 @@ Esto aportaba independencia entre recuperación de VM y recuperación lógica de
 
 ## Estado
 
-Revisión abierta. Próximo paso: inspeccionar en modo solo lectura `/home/oracle/exportar_kanela_full_v2.sql` para confirmar `FULL=Y`, destino efectivo del dump, buffers/estadísticas y demás parámetros del export clásico.
+Revisión abierta. Próximo paso: inspeccionar en modo solo lectura las últimas líneas de `/home/oracle/exportar_kanela_full_v2.log` para determinar si los exports terminaban con éxito, advertencias o errores y confirmar el comportamiento real de las ejecuciones más recientes.
