@@ -119,32 +119,61 @@ no rows selected
 
 Conclusión: **no existe auditoría explícita por objetos** actualmente.
 
-## Interpretación consolidada
+## Composición de la auditoría reciente — últimos 12 meses
 
-- La auditoría tradicional actual es global y relativamente amplia.
-- Tanto operaciones exitosas como fallidas se registran `BY ACCESS`.
-- `CREATE SESSION` está auditado y es coherente con el gran número histórico de eventos de conexión generados por los imports de 2019.
-- Existen además múltiples privilegios administrativos sensibles auditados globalmente; no deben desactivarse de forma indiscriminada.
-- No existe auditoría específica por objetos que deba preservarse o reconciliarse antes de simplificar la política.
-- El problema actual sigue siendo principalmente la retención histórica acumulada, no una generación reciente masiva.
-- El inventario de auditoría tradicional queda completo: sentencia, privilegio y objeto.
-- Antes de proponer `NOAUDIT` o purga se debe observar la composición de la auditoría reciente para distinguir actividad rutinaria de eventos administrativos/fallidos realmente útiles.
-
-## Siguiente diagnóstico autorizado
-
-Medir la composición de la auditoría reciente por acción y código de retorno durante los últimos 12 meses disponibles:
+Se ejecutó:
 
 ```sql
 SELECT action_name, returncode, COUNT(*) audit_rows FROM dba_audit_trail WHERE timestamp >= ADD_MONTHS(TRUNC(SYSDATE),-12) GROUP BY action_name, returncode ORDER BY audit_rows DESC;
 ```
 
+Resultado:
+
+```text
+LOGON    0      256
+LOGOFF   0      256
+LOGON 1017       63
+LOGON 28000       1
+```
+
+Interpretación:
+
+- el volumen reciente es bajo: solo **576** eventos auditados en 12 meses;
+- existen **256 conexiones exitosas** y sus **256 LOGOFF** correspondientes;
+- hubo **63 intentos fallidos ORA-01017** (`invalid username/password; logon denied`);
+- hubo **1 ORA-28000** (`the account is locked`);
+- no aparecen en esta ventana otras acciones administrativas en volumen material;
+- por tanto, el problema de espacio de `AUD$` es histórico, no crecimiento reciente;
+- los fallos de autenticación sí tienen valor operativo y conviene preservarlos;
+- las conexiones exitosas rutinarias son el principal candidato a dejar de auditar cuando se pase a ejecución, mientras se mantienen los fallos de sesión y las operaciones administrativas sensibles.
+
+## Política preliminar — aún no ejecutada
+
+La evidencia disponible sugiere como diseño futuro:
+
+1. Mantener auditoría de privilegios/operaciones administrativas sensibles.
+2. Mantener auditoría de `CREATE SESSION` **cuando falle**.
+3. Evaluar dejar de registrar `CREATE SESSION` exitoso rutinario para evitar ruido innecesario.
+4. Definir una ventana de retención limitada del audit trail en vez de conservar 17 años indefinidamente.
+5. Antes de purgar, realizar respaldo/exportación del histórico que se decida conservar y documentar el procedimiento de recuperación.
+6. La purga debe ser controlada y mediante mecanismo soportado; no `DELETE`/`TRUNCATE` directo sobre `SYS.AUD$`.
+
+No se autoriza todavía ningún cambio: esta política sigue siendo preliminar hasta identificar el origen de los fallos de autenticación recientes.
+
+## Siguiente diagnóstico autorizado
+
+Identificar usuario, host y usuario de sistema operativo asociados a los `LOGON` fallidos de los últimos 12 meses:
+
+```sql
+SELECT NVL(username,'<NULL>') username, NVL(userhost,'<NULL>') userhost, NVL(os_username,'<NULL>') os_username, returncode, COUNT(*) audit_rows, MIN(timestamp) first_seen, MAX(timestamp) last_seen FROM dba_audit_trail WHERE timestamp >= ADD_MONTHS(TRUNC(SYSDATE),-12) AND action_name='LOGON' AND returncode <> 0 GROUP BY NVL(username,'<NULL>'), NVL(userhost,'<NULL>'), NVL(os_username,'<NULL>'), returncode ORDER BY audit_rows DESC;
+```
+
 Objetivos:
 
-- identificar qué acciones explican el volumen reciente;
-- comprobar si `LOGON`/`LOGOFF` exitosos siguen siendo la mayor fuente de ruido;
-- separar eventos fallidos de eventos exitosos rutinarios;
-- usar evidencia reciente, no solo la anomalía de 2019, para diseñar la política futura;
-- definir posteriormente una combinación segura de auditoría, retención, archivado previo y purga controlada.
+- comprobar si los 63 `ORA-01017` provienen de una aplicación/credencial antigua conocida;
+- identificar el origen del único `ORA-28000`;
+- descartar un patrón externo o inesperado antes de modificar la política de auditoría;
+- cerrar el diagnóstico de auditoría activa y pasar a planificación de retención/purga.
 
 Estado: **resultado pendiente**.
 
