@@ -200,33 +200,61 @@ Principales resultados:
 2019-01 ADMIN  LOGOFF  0   163763
 ```
 
-El resto de combinaciones aparece solo en cantidades pequeñas comparadas con `ADMIN`.
-
 Interpretación:
 
-- enero de 2019: `ADMIN` produjo **327.698** eventos `LOGON` + `LOGOFF` exitosos, aproximadamente **99,8%** de todos los registros del mes;
-- junio de 2019: `ADMIN` produjo **376.985** eventos `LOGON` + `LOGOFF` exitosos, aproximadamente **99,94%** de todos los registros del mes;
+- enero de 2019: `ADMIN` produjo **327.698** eventos `LOGON` + `LOGOFF` exitosos;
+- junio de 2019: `ADMIN` produjo **376.985** eventos `LOGON` + `LOGOFF` exitosos;
 - combinados, son **704.683 eventos**, aproximadamente **99,88%** de los 705.549 registros de ambos meses;
-- `RETURNCODE=0` demuestra que se trató predominantemente de conexiones exitosas, no de errores masivos de autenticación;
-- los pocos `RETURNCODE=1017` observados son marginales y no explican la ocupación histórica;
-- el patrón es consistente con un proceso o aplicación que abría y cerraba sesiones Oracle de forma extremadamente frecuente usando la cuenta `ADMIN`;
-- no se infiere todavía qué aplicación o máquina era responsable: debe identificarse el origen mediante `USERHOST`, `OS_USERNAME` y `TERMINAL` antes de concluir la causa operativa.
+- `RETURNCODE=0` demuestra que se trató predominantemente de conexiones exitosas, no de errores masivos de autenticación.
+
+La consulta por origen cliente confirmó como fuentes dominantes:
+
+```text
+2019-06  USERHOST=PARQUE\RODEOXP
+         OS_USERNAME=caja
+         TERMINAL=RODEOXP
+         LOGON  = 188267
+         LOGOFF = 188261
+
+2019-01  USERHOST=GRUPO_TRABAJO\445F235B7F31467
+         OS_USERNAME=xoldfusion
+         TERMINAL=445F235B7F31467
+         LOGON  = 163734
+         LOGOFF = 163725
+```
+
+Los demás hosts/usuarios aparecen en cantidades marginales frente a esos dos orígenes.
+
+### Confirmación funcional del usuario — causa conocida
+
+El usuario confirmó que esos episodios correspondían a **imports/cargas temporales desde servidores de producción**. El propósito era disponer localmente de los datos necesarios para elaborar informes. Una vez terminados los uploads y el análisis, ya no existía necesidad funcional de conservar ese universo completo de datos ni una auditoría histórica tan extendida.
+
+Conclusión de esta rama:
+
+- el pico de 2019 tiene una explicación operativa conocida y coherente con la evidencia;
+- no hace falta seguir investigando esos hosts como anomalía;
+- el patrón de `LOGON`/`LOGOFF` masivo refleja el mecanismo de las cargas temporales realizadas entonces;
+- desde 2020 la generación de auditoría es muy baja, por lo que el problema actual es principalmente **retención histórica acumulada**, no crecimiento reciente;
+- no existe requerimiento funcional expresado por el usuario para conservar 17 años de audit trail;
+- antes de purgar se debe definir qué auditoría debe seguir activa, qué ventana de retención conservar y qué respaldo/exportación se hará antes de eliminar histórico.
 
 ### Siguiente diagnóstico autorizado
 
-Consulta de solo lectura para identificar el origen cliente de los `LOGON`/`LOGOFF` exitosos de `ADMIN` en enero y junio de 2019:
+La rama de atribución histórica queda cerrada. El siguiente paso es inventariar **qué auditoría de sentencias está habilitada actualmente**, en especial si continúa activo `AUDIT SESSION` u otras opciones que ya no sean necesarias.
+
+Consulta de solo lectura:
 
 ```sql
-SELECT * FROM (SELECT TO_CHAR(timestamp,'YYYY-MM') audit_month, NVL(userhost,'<NULL>') userhost, NVL(os_username,'<NULL>') os_username, NVL(terminal,'<NULL>') terminal, action_name, COUNT(*) audit_rows FROM dba_audit_trail WHERE username='ADMIN' AND returncode=0 AND action_name IN ('LOGON','LOGOFF') AND ((timestamp >= DATE '2019-01-01' AND timestamp < DATE '2019-02-01') OR (timestamp >= DATE '2019-06-01' AND timestamp < DATE '2019-07-01')) GROUP BY TO_CHAR(timestamp,'YYYY-MM'), NVL(userhost,'<NULL>'), NVL(os_username,'<NULL>'), NVL(terminal,'<NULL>'), action_name ORDER BY audit_rows DESC) WHERE ROWNUM <= 30;
+SELECT user_name, proxy_name, audit_option, success, failure FROM dba_stmt_audit_opts ORDER BY user_name, proxy_name, audit_option;
 ```
 
 Objetivos:
 
-- identificar el host o hosts que originaron la avalancha de conexiones;
-- identificar, si está disponible, el usuario del sistema operativo y terminal cliente;
-- determinar si enero y junio provienen del mismo origen;
-- separar el diagnóstico histórico del problema actual: desde 2020 el volumen de auditoría es bajo;
-- solo después evaluar una política segura de retención/archivado/purga de `AUD$`.
+- identificar las opciones de auditoría estándar actualmente activas;
+- verificar si `SESSION` sigue auditándose y bajo qué modalidad;
+- distinguir auditoría global de auditoría específica por usuario;
+- diseñar posteriormente una política de retención razonable;
+- planificar, antes de cualquier purga, un respaldo/exportación del histórico que se decida conservar.
 
 Estado: **resultado pendiente**.
 
@@ -234,4 +262,4 @@ No se autoriza todavía ninguna purga, movimiento de `AUD$`, modificación de au
 
 ## Regla de seguridad
 
-No ejecutar todavía `ALTER DATABASE DATAFILE`, `ALTER TABLESPACE ... ADD DATAFILE`, reducción de datafiles, cambios de `AUTOEXTEND`, cambios de RMAN, `TRUNCATE`/`DELETE` sobre `SYS.AUD$`, ni eliminación de respaldos. Esta misión continúa exclusivamente en modo diagnóstico y planificación.
+No ejecutar todavía `ALTER DATABASE DATAFILE`, `ALTER TABLESPACE ... ADD DATAFILE`, reducción de datafiles, cambios de `AUTOEXTEND`, cambios de RMAN, `TRUNCATE`/`DELETE` sobre `SYS.AUD$`, comandos `NOAUDIT`, ni eliminación de respaldos. Esta misión continúa exclusivamente en modo diagnóstico y planificación.
