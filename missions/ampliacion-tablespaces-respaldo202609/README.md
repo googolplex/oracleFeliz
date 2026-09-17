@@ -53,6 +53,27 @@ Estado de referencia al 2026-09-16:
 3. Inventariar y revisar el procedimiento de respaldo actual.
 4. Solo después diseñar la ampliación de `TABLAS` y, si corresponde, de otros tablespaces.
 
+## Estado de ejecución — 2026-09-16
+
+Se inició formalmente la fase de diagnóstico de ocupación de `SYSTEM` y `SYSAUX`.
+
+Primera consulta diagnóstica solicitada, exclusivamente de lectura, para identificar los 20 segmentos de mayor tamaño en cada uno de esos tablespaces:
+
+```sql
+SELECT tablespace_name, owner, segment_name, segment_type, ROUND(bytes/1024/1024,2) mb FROM (SELECT tablespace_name, owner, segment_name, segment_type, bytes, ROW_NUMBER() OVER (PARTITION BY tablespace_name ORDER BY bytes DESC) rn FROM dba_segments WHERE tablespace_name IN ('SYSTEM','SYSAUX')) WHERE rn <= 20 ORDER BY tablespace_name, mb DESC;
+```
+
+Estado actual: **consulta preparada / resultado pendiente de captura**.
+
+Objetivo inmediato de esta evidencia:
+
+- verificar qué segmentos explican la ocupación de `SYSTEM` y `SYSAUX`;
+- detectar objetos impropios o inesperados en `SYSTEM`;
+- distinguir crecimiento normal del diccionario/AWR frente a crecimiento anómalo;
+- decidir la siguiente consulta de diagnóstico antes de pasar a `TABLAS`.
+
+No se autoriza todavía ninguna modificación estructural.
+
 ## Regla de seguridad
 
 No ejecutar todavía `ALTER DATABASE DATAFILE`, `ALTER TABLESPACE ... ADD DATAFILE`, reducción de datafiles, cambios de `AUTOEXTEND`, cambios de RMAN ni eliminación de respaldos. Esta misión comienza exclusivamente en modo diagnóstico y planificación.
