@@ -55,22 +55,80 @@ Estado de referencia al 2026-09-16:
 
 ## Estado de ejecución — 2026-09-16
 
-Se inició formalmente la fase de diagnóstico de ocupación de `SYSTEM` y `SYSAUX`.
+### Diagnóstico de segmentos de `SYSTEM` y `SYSAUX`
 
-Primera consulta diagnóstica solicitada, exclusivamente de lectura, para identificar los 20 segmentos de mayor tamaño en cada uno de esos tablespaces:
+Se ejecutó correctamente la consulta de los 20 segmentos de mayor tamaño por tablespace:
 
 ```sql
 SELECT tablespace_name, owner, segment_name, segment_type, ROUND(bytes/1024/1024,2) mb FROM (SELECT tablespace_name, owner, segment_name, segment_type, bytes, ROW_NUMBER() OVER (PARTITION BY tablespace_name ORDER BY bytes DESC) rn FROM dba_segments WHERE tablespace_name IN ('SYSTEM','SYSAUX')) WHERE rn <= 20 ORDER BY tablespace_name, mb DESC;
 ```
 
-Estado actual: **consulta preparada / resultado pendiente de captura**.
+Resultado: 40 filas, 20 de `SYSAUX` y 20 de `SYSTEM`.
 
-Objetivo inmediato de esta evidencia:
+#### Hallazgos en `SYSTEM`
 
-- verificar qué segmentos explican la ocupación de `SYSTEM` y `SYSAUX`;
-- detectar objetos impropios o inesperados en `SYSTEM`;
-- distinguir crecimiento normal del diccionario/AWR frente a crecimiento anómalo;
-- decidir la siguiente consulta de diagnóstico antes de pasar a `TABLAS`.
+Principales segmentos observados:
+
+- `SYS.AUD$` — TABLE — **250 MB**.
+- `SYS.IDL_UB1$` — TABLE — **248 MB**.
+- `SYS.SOURCE$` — TABLE — **72 MB**.
+- `SYSTEM.SYS_LOB0000255229C00045$$` — LOBSEGMENT — **35 MB**.
+- `SYS.IDL_UB2$` — TABLE — **33 MB**.
+- `SYS.C_OBJ#_INTCOL#` — CLUSTER — **27 MB**.
+- `SYS.C_TOID_VERSION#` — CLUSTER — **24 MB**.
+- `SYS.C_OBJ#` — CLUSTER — **21 MB**.
+- `SYS.I_SOURCE1` — INDEX — **15 MB**.
+- `SYS.JAVA$MC$` — TABLE — **13 MB**.
+- `SYS.OBJ$` — TABLE — **12 MB**.
+- varios LOBSEGMENT del esquema `SYSTEM` — aproximadamente 12 MB cada uno.
+
+Interpretación provisional:
+
+- La mayor parte de los objetos grandes de `SYSTEM` corresponde al diccionario interno de Oracle.
+- Sin embargo, `SYS.AUD$` con **250 MB** es un consumidor particularmente relevante: representa aproximadamente una quinta parte del tamaño actual de `SYSTEM` (1190 MB).
+- Antes de atribuir el problema a falta física de capacidad o ampliar `SYSTEM`, debe investigarse el volumen, antigüedad y configuración del audit trail.
+- No purgar, mover ni modificar `SYS.AUD$` todavía.
+
+#### Hallazgos en `SYSAUX`
+
+Principales segmentos observados:
+
+- `SYS.I_WRI$_OPTSTAT_H_OBJ#_ICOL#_ST` — INDEX — **60 MB**.
+- `XDB.SYS_LOB0000056506C00025$$` — LOBSEGMENT — **57.13 MB**.
+- `SYS.WRI$_ADV_MSG_GRPS_IDX_01` — INDEX — **54 MB**.
+- `SYS.WRI$_ADV_MESSAGE_GROUPS_PK` — INDEX — **50 MB**.
+- `SYS.SCHEDULER$_EVENT_LOG` — TABLE — **48 MB**.
+- `SYS.WRI$_ADV_MESSAGE_GROUPS` — TABLE — **39 MB**.
+- `SYS.WRI$_OPTSTAT_HISTGRM_HISTORY` — TABLE — **38 MB**.
+- `SYS.I_WRI$_OPTSTAT_H_ST` — INDEX — **28 MB**.
+- `SYS.WRI$_ADV_SQLT_PLANS` — TABLE — **21 MB**.
+- LOBs internos SYS/MDSYS — aproximadamente 18–20 MB.
+- objetos `WRH$_*` de AWR entre los mayores restantes, incluyendo `WRH$_SYSMETRIC_HISTORY` y `WRH$_SQL_PLAN_PK`.
+
+Interpretación provisional:
+
+- Los mayores consumidores observados en `SYSAUX` pertenecen a componentes internos esperables: optimizer statistics history, Advisor, Scheduler, XDB, MDSYS y AWR.
+- En esta primera inspección no aparece un segmento de aplicación evidente ni un único objeto anómalo que justifique una modificación inmediata.
+- Se mantiene la política de no borrar ni mover objetos internos de `SYSAUX` sin diagnóstico específico.
+
+### Siguiente diagnóstico autorizado
+
+Prioridad inmediata: caracterizar `SYS.AUD$` antes de continuar con decisiones sobre `SYSTEM`.
+
+Consulta solicitada, solo lectura:
+
+```sql
+SELECT (SELECT value FROM v$parameter WHERE name='audit_trail') audit_trail, COUNT(*) audit_rows, MIN(timestamp#) oldest_audit, MAX(timestamp#) newest_audit FROM sys.aud$;
+```
+
+Objetivos:
+
+- confirmar la configuración actual de `AUDIT_TRAIL`;
+- contar las filas almacenadas en `SYS.AUD$`;
+- identificar la fecha de la auditoría más antigua y la más reciente;
+- decidir si corresponde estudiar retención/limpieza del audit trail antes de cualquier ampliación de `SYSTEM`.
+
+Estado: **resultado pendiente**.
 
 No se autoriza todavía ninguna modificación estructural.
 
