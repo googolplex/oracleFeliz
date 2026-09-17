@@ -57,11 +57,7 @@ Estado de referencia al 2026-09-16:
 
 ### Diagnóstico de segmentos de `SYSTEM` y `SYSAUX`
 
-Se ejecutó correctamente la consulta de los 20 segmentos de mayor tamaño por tablespace:
-
-```sql
-SELECT tablespace_name, owner, segment_name, segment_type, ROUND(bytes/1024/1024,2) mb FROM (SELECT tablespace_name, owner, segment_name, segment_type, bytes, ROW_NUMBER() OVER (PARTITION BY tablespace_name ORDER BY bytes DESC) rn FROM dba_segments WHERE tablespace_name IN ('SYSTEM','SYSAUX')) WHERE rn <= 20 ORDER BY tablespace_name, mb DESC;
-```
+Se ejecutó correctamente la consulta de los 20 segmentos de mayor tamaño por tablespace.
 
 Resultado: 40 filas, 20 de `SYSAUX` y 20 de `SYSTEM`.
 
@@ -85,7 +81,7 @@ Principales segmentos observados:
 Interpretación provisional:
 
 - La mayor parte de los objetos grandes de `SYSTEM` corresponde al diccionario interno de Oracle.
-- Sin embargo, `SYS.AUD$` con **250 MB** es un consumidor particularmente relevante: representa aproximadamente una quinta parte del tamaño actual de `SYSTEM` (1190 MB).
+- `SYS.AUD$` con **250 MB** es un consumidor relevante: aproximadamente una quinta parte del tamaño actual de `SYSTEM` (1190 MB).
 - Antes de atribuir el problema a falta física de capacidad o ampliar `SYSTEM`, debe investigarse el volumen, antigüedad y configuración del audit trail.
 - No purgar, mover ni modificar `SYS.AUD$` todavía.
 
@@ -103,7 +99,7 @@ Principales segmentos observados:
 - `SYS.I_WRI$_OPTSTAT_H_ST` — INDEX — **28 MB**.
 - `SYS.WRI$_ADV_SQLT_PLANS` — TABLE — **21 MB**.
 - LOBs internos SYS/MDSYS — aproximadamente 18–20 MB.
-- objetos `WRH$_*` de AWR entre los mayores restantes, incluyendo `WRH$_SYSMETRIC_HISTORY` y `WRH$_SQL_PLAN_PK`.
+- objetos `WRH$_*` de AWR entre los mayores restantes.
 
 Interpretación provisional:
 
@@ -113,43 +109,43 @@ Interpretación provisional:
 
 ### Diagnóstico de `SYS.AUD$`
 
-La primera consulta propuesta fue:
+La primera consulta combinada produjo `ORA-00937: not a single-group group function`. Fue corregida separando la lectura de `AUDIT_TRAIL` y los agregados en subconsultas de una fila. No hubo modificación de datos ni efecto sobre la base.
 
-```sql
-SELECT (SELECT value FROM v$parameter WHERE name='audit_trail') audit_trail, COUNT(*) audit_rows, MIN(timestamp#) oldest_audit, MAX(timestamp#) newest_audit FROM sys.aud$;
-```
-
-En Oracle 11.2.0.1 produjo:
+La consulta corregida devolvió:
 
 ```text
-ORA-00937: not a single-group group function
+AUDIT_TRAIL = DB
+AUDIT_ROWS  = 1216698
+OLDEST_AUDIT = NULL / no mostrado
+NEWEST_AUDIT = NULL / no mostrado
 ```
 
-Causa: la expresión escalar que obtiene `AUDIT_TRAIL` se combinó en el mismo `SELECT` con funciones de grupo sobre `SYS.AUD$`, sin `GROUP BY`.
+Hallazgos:
 
-No hubo modificación de datos ni efecto sobre la base.
+- el audit trail tradicional está configurado como `DB`;
+- existen **1.216.698 filas** en `SYS.AUD$`;
+- el volumen confirma que `SYS.AUD$` es un componente material de la ocupación de `SYSTEM`;
+- `MIN(timestamp#)` y `MAX(timestamp#)` no devolvieron valores visibles, por lo que no se debe inferir aún la antigüedad del audit trail;
+- antes de cualquier limpieza o ampliación se debe obtener la cronología mediante la vista documentada `DBA_AUDIT_TRAIL`.
 
 ### Siguiente diagnóstico autorizado
 
-Prioridad inmediata: caracterizar `SYS.AUD$` antes de continuar con decisiones sobre `SYSTEM`.
-
-Consulta corregida, solo lectura, separando la lectura del parámetro y los agregados en dos subconsultas de una fila:
+Consulta de solo lectura para obtener la cronología usando las columnas documentadas de Oracle 11g (`TIMESTAMP` local y `EXTENDED_TIMESTAMP` UTC):
 
 ```sql
-SELECT p.value audit_trail, a.audit_rows, a.oldest_audit, a.newest_audit FROM (SELECT value FROM v$parameter WHERE name='audit_trail') p CROSS JOIN (SELECT COUNT(*) audit_rows, MIN(timestamp#) oldest_audit, MAX(timestamp#) newest_audit FROM sys.aud$) a;
+SELECT COUNT(*) audit_rows, MIN(timestamp) oldest_local, MAX(timestamp) newest_local, MIN(extended_timestamp) oldest_utc, MAX(extended_timestamp) newest_utc FROM dba_audit_trail;
 ```
 
 Objetivos:
 
-- confirmar la configuración actual de `AUDIT_TRAIL`;
-- contar las filas almacenadas en `SYS.AUD$`;
-- identificar la fecha de la auditoría más antigua y la más reciente;
-- decidir si corresponde estudiar retención/limpieza del audit trail antes de cualquier ampliación de `SYSTEM`.
+- confirmar que las 1.216.698 entradas son visibles a través de `DBA_AUDIT_TRAIL`;
+- identificar la entrada más antigua y la más reciente;
+- determinar la ventana histórica real retenida antes de estudiar política de retención, archivado o purga.
 
 Estado: **resultado pendiente**.
 
-No se autoriza todavía ninguna modificación estructural.
+No se autoriza todavía ninguna purga, movimiento de `AUD$`, modificación de auditoría ni cambio estructural de tablespaces.
 
 ## Regla de seguridad
 
-No ejecutar todavía `ALTER DATABASE DATAFILE`, `ALTER TABLESPACE ... ADD DATAFILE`, reducción de datafiles, cambios de `AUTOEXTEND`, cambios de RMAN ni eliminación de respaldos. Esta misión comienza exclusivamente en modo diagnóstico y planificación.
+No ejecutar todavía `ALTER DATABASE DATAFILE`, `ALTER TABLESPACE ... ADD DATAFILE`, reducción de datafiles, cambios de `AUTOEXTEND`, cambios de RMAN, `TRUNCATE`/`DELETE` sobre `SYS.AUD$`, ni eliminación de respaldos. Esta misión continúa exclusivamente en modo diagnóstico y planificación.
