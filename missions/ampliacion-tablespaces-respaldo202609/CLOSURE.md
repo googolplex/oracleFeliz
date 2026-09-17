@@ -127,6 +127,46 @@ Consecuencia:
 - la operación fue aceptada por Oracle sin error;
 - el nuevo tamaño sigue dejando un margen amplio por encima del HWM observado de 427 MB.
 
+## Diagnóstico ADR / logs del filesystem
+
+Se consultó `V$DIAG_INFO` y se confirmó:
+
+```text
+ADR Base: /home/oracle/app/oracle
+ADR Home: /home/oracle/app/oracle/diag/rdbms/orcl/orcl
+Active Incident Count: 17217
+Active Problem Count: 2
+Diag Alert: /home/oracle/app/oracle/diag/rdbms/orcl/orcl/alert
+Diag Incident: /home/oracle/app/oracle/diag/rdbms/orcl/orcl/incident
+Diag Trace: /home/oracle/app/oracle/diag/rdbms/orcl/orcl/trace
+```
+
+Luego se midió el ADR en filesystem:
+
+```text
+33M   alert
+8.0K  cdump
+8.0K  hm
+41G   incident
+8.0K  incpkg
+16K   ir
+168K  lck
+21M   metadata
+176M  stage
+636K  sweep
+979M  trace
+```
+
+Conclusión:
+
+- el directorio `incident` es, por amplio margen, el principal consumidor: **~41 GB**;
+- `trace` añade **~979 MB**;
+- `stage` añade **~176 MB**;
+- `alert` ocupa **~33 MB**;
+- los **17.217 incidentes activos** son coherentes con la enorme acumulación observada;
+- antes de borrar nada manualmente se usará `adrci`, ya que Oracle 11g soporta purga por edad y tipo de contenido ADR;
+- `PURGE` requiere trabajar con un único ADR home seleccionado, por lo que el siguiente paso es identificar los homes conocidos por `adrci` y seleccionar el correspondiente a `orcl` antes de purgar.
+
 ## Acciones no realizadas todavía
 
 - no ampliar `TABLAS`;
@@ -137,10 +177,12 @@ Consecuencia:
 - no cambiar `AUDIT_TRAIL`;
 - no cambiar configuración RMAN;
 - no eliminar respaldos;
-- no modificar `AUTOEXTEND`.
+- no modificar `AUTOEXTEND`;
+- no se borraron manualmente archivos del ADR;
+- no se ejecutó todavía `adrci purge`.
 
 ## Estado de la misión
 
 **BASE RECUPERADA / FASE DE LIBERACIÓN DE ESPACIO ABIERTA.**
 
-La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, y además se devolvieron aproximadamente **12,06 GiB físicos al filesystem** mediante la reducción controlada de `UNDOTBS1` de 13.370 MB a 1.024 MB.
+La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, se devolvieron aproximadamente **12,06 GiB físicos al filesystem** mediante la reducción controlada de `UNDOTBS1`, y se identificó una nueva oportunidad de recuperación mucho mayor: **~41 GB acumulados en el directorio ADR `incident`**, pendientes de purga controlada con `adrci`.
