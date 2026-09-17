@@ -103,30 +103,48 @@ GRANT ANY PRIVILEGE
 GRANT ANY ROLE
 ```
 
+## Auditoría por objetos
+
+Se ejecutó, solo lectura:
+
+```sql
+SELECT owner, object_name, object_type, alt, aud, com, del, gra, ind, ins, loc, ren, sel, upd, ref, exe FROM dba_obj_audit_opts WHERE alt <> '-/-' OR aud <> '-/-' OR com <> '-/-' OR del <> '-/-' OR gra <> '-/-' OR ind <> '-/-' OR ins <> '-/-' OR loc <> '-/-' OR ren <> '-/-' OR sel <> '-/-' OR upd <> '-/-' OR ref <> '-/-' OR exe <> '-/-' ORDER BY owner, object_name;
+```
+
+Resultado:
+
+```text
+no rows selected
+```
+
+Conclusión: **no existe auditoría explícita por objetos** actualmente.
+
 ## Interpretación consolidada
 
 - La auditoría tradicional actual es global y relativamente amplia.
 - Tanto operaciones exitosas como fallidas se registran `BY ACCESS`.
 - `CREATE SESSION` está auditado y es coherente con el gran número histórico de eventos de conexión generados por los imports de 2019.
 - Existen además múltiples privilegios administrativos sensibles auditados globalmente; no deben desactivarse de forma indiscriminada.
+- No existe auditoría específica por objetos que deba preservarse o reconciliarse antes de simplificar la política.
 - El problema actual sigue siendo principalmente la retención histórica acumulada, no una generación reciente masiva.
-- Antes de ejecutar `NOAUDIT` o purgar `SYS.AUD$`, debe cerrarse el inventario con la auditoría por objetos.
-- La política futura deberá distinguir entre actividad rutinaria de poco valor operativo (por ejemplo conexiones exitosas normales) y eventos administrativos o fallidos que sí conviene conservar.
+- El inventario de auditoría tradicional queda completo: sentencia, privilegio y objeto.
+- Antes de proponer `NOAUDIT` o purga se debe observar la composición de la auditoría reciente para distinguir actividad rutinaria de eventos administrativos/fallidos realmente útiles.
 
 ## Siguiente diagnóstico autorizado
 
-Inventariar únicamente objetos que tengan alguna opción de auditoría activa:
+Medir la composición de la auditoría reciente por acción y código de retorno durante los últimos 12 meses disponibles:
 
 ```sql
-SELECT owner, object_name, object_type, alt, aud, com, del, gra, ind, ins, loc, ren, sel, upd, ref, exe FROM dba_obj_audit_opts WHERE alt <> '-/-' OR aud <> '-/-' OR com <> '-/-' OR del <> '-/-' OR gra <> '-/-' OR ind <> '-/-' OR ins <> '-/-' OR loc <> '-/-' OR ren <> '-/-' OR sel <> '-/-' OR upd <> '-/-' OR ref <> '-/-' OR exe <> '-/-' ORDER BY owner, object_name;
+SELECT action_name, returncode, COUNT(*) audit_rows FROM dba_audit_trail WHERE timestamp >= ADD_MONTHS(TRUNC(SYSDATE),-12) GROUP BY action_name, returncode ORDER BY audit_rows DESC;
 ```
 
 Objetivos:
 
-- determinar si existe auditoría explícita sobre tablas, vistas, procedimientos u otros objetos;
-- completar el mapa de auditoría tradicional activa;
-- evitar que una futura simplificación de auditoría afecte controles específicos que pudieran ser útiles;
-- recién después diseñar una propuesta de retención, archivado previo y purga controlada.
+- identificar qué acciones explican el volumen reciente;
+- comprobar si `LOGON`/`LOGOFF` exitosos siguen siendo la mayor fuente de ruido;
+- separar eventos fallidos de eventos exitosos rutinarios;
+- usar evidencia reciente, no solo la anomalía de 2019, para diseñar la política futura;
+- definir posteriormente una combinación segura de auditoría, retención, archivado previo y purga controlada.
 
 Estado: **resultado pendiente**.
 
