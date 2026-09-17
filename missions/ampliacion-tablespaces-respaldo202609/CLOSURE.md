@@ -302,6 +302,23 @@ Por tanto:
 - no se borraron manualmente archivos del ADR;
 - no se ejecutó `BLOCKRECOVER` sobre el bloque residual 2/76214.
 
+## Contexto histórico y lecciones de operación
+
+Este sistema también conserva valor como ejemplo de longevidad de una plataforma tecnológica bien mantenida. `kanela` ejecuta **Oracle 11g sobre CentOS 5.11**, una combinación ya veterana que continúa arrancando, operando y permitiendo tareas de diagnóstico y recuperación muchos años después de su despliegue original.
+
+El entorno se apoya en hardware y prácticas orientadas a la resiliencia:
+
+- almacenamiento en **SSD configurados en RAID1**, para baja latencia y redundancia local;
+- **backups automáticos abundantes entre `zapallo` y `cafe`**, independientes de la redundancia del RAID;
+- uso de **fuentes de alimentación de buena calidad**;
+- experiencia acumulada después de diversos problemas eléctricos;
+- preferencia para servidores por hardware simple y durable, minimizando partes móviles innecesarias;
+- evitar, cuando no son necesarios, dispositivos gráficos con pequeños ventiladores propios y sistemas de refrigeración líquida/hidrocoolers, privilegiando soluciones térmicas sencillas, robustas y de bajo mantenimiento.
+
+El usuario tiene experiencia previa como **Oracle DBA** y dedicó, junto con otros profesionales de su época, una cantidad considerable de tiempo humano a aprender administración de bases de datos. Esa formación sigue influyendo directamente en la metodología aplicada actualmente: observar y diagnosticar antes de modificar, trabajar con evidencia, realizar cambios pequeños y controlados, preservar la recuperabilidad y validar siempre el resultado posterior.
+
+La misma disciplina se reutiliza hoy en otros dominios, especialmente en proyectos **IoT y telemetría**: aislamiento estricto de dominios, identificación precisa de fuentes, Discovery antes de asignar semántica, trazabilidad, controles de consistencia y cambios reversibles. La experiencia histórica con Oracle y sistemas Linux/Unix no se considera solamente conocimiento legado, sino una base metodológica que continúa aportando valor en sistemas modernos y heterogéneos.
+
 ## Estado de la misión
 
 **BASE RECUPERADA / FASE DE LIBERACIÓN DE ESPACIO ABIERTA.**
