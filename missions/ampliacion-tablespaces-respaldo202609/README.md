@@ -111,36 +111,46 @@ Interpretación provisional:
 
 La primera consulta combinada produjo `ORA-00937: not a single-group group function`. Fue corregida separando la lectura de `AUDIT_TRAIL` y los agregados en subconsultas de una fila. No hubo modificación de datos ni efecto sobre la base.
 
-La consulta corregida devolvió:
+La consulta corregida confirmó:
 
 ```text
 AUDIT_TRAIL = DB
 AUDIT_ROWS  = 1216698
-OLDEST_AUDIT = NULL / no mostrado
-NEWEST_AUDIT = NULL / no mostrado
 ```
 
-Hallazgos:
+Luego se obtuvo la cronología mediante `DBA_AUDIT_TRAIL`:
+
+```text
+AUDIT_ROWS = 1216698
+OLDEST_LOCAL = 15-AUG-09
+NEWEST_LOCAL = 16-SEP-26
+OLDEST_UTC = 15-AUG-09 03.25.27.182496 AM -04:00
+NEWEST_UTC = 16-SEP-26 02.23.30.840963 AM -04:00
+```
+
+Hallazgos consolidados:
 
 - el audit trail tradicional está configurado como `DB`;
 - existen **1.216.698 filas** en `SYS.AUD$`;
-- el volumen confirma que `SYS.AUD$` es un componente material de la ocupación de `SYSTEM`;
-- `MIN(timestamp#)` y `MAX(timestamp#)` no devolvieron valores visibles, por lo que no se debe inferir aún la antigüedad del audit trail;
-- antes de cualquier limpieza o ampliación se debe obtener la cronología mediante la vista documentada `DBA_AUDIT_TRAIL`.
+- `SYS.AUD$` ocupa aproximadamente **250 MB** dentro de `SYSTEM`;
+- la auditoría retenida abarca desde **15-AGO-2009** hasta **16-SEP-2026**, más de 17 años de historia;
+- por tanto, existe evidencia fuerte de acumulación histórica prolongada y la presión de espacio de `SYSTEM` no debe interpretarse únicamente como crecimiento normal del diccionario;
+- todavía no se decide purga, retención ni movimiento del audit trail: primero se debe cuantificar su distribución temporal y el patrón reciente de crecimiento.
 
 ### Siguiente diagnóstico autorizado
 
-Consulta de solo lectura para obtener la cronología usando las columnas documentadas de Oracle 11g (`TIMESTAMP` local y `EXTENDED_TIMESTAMP` UTC):
+Consulta de solo lectura para cuantificar las entradas del audit trail por año:
 
 ```sql
-SELECT COUNT(*) audit_rows, MIN(timestamp) oldest_local, MAX(timestamp) newest_local, MIN(extended_timestamp) oldest_utc, MAX(extended_timestamp) newest_utc FROM dba_audit_trail;
+SELECT TO_CHAR(timestamp,'YYYY') audit_year, COUNT(*) audit_rows FROM dba_audit_trail GROUP BY TO_CHAR(timestamp,'YYYY') ORDER BY audit_year;
 ```
 
 Objetivos:
 
-- confirmar que las 1.216.698 entradas son visibles a través de `DBA_AUDIT_TRAIL`;
-- identificar la entrada más antigua y la más reciente;
-- determinar la ventana histórica real retenida antes de estudiar política de retención, archivado o purga.
+- medir cuántas filas corresponden a cada año entre 2009 y 2026;
+- identificar si la generación de auditoría es estable, creciente o concentrada en ciertos períodos;
+- estimar qué proporción del volumen corresponde a historia antigua frente a actividad reciente;
+- usar esa evidencia posteriormente para diseñar una política de retención/archivado/purga segura, sin ejecutar aún ninguna eliminación.
 
 Estado: **resultado pendiente**.
 
