@@ -56,29 +56,77 @@ SYSTEM AUDIT
 SYSTEM GRANT
 ```
 
-## Interpretación
+## Auditoría por privilegios actualmente activa
 
-- La auditoría estándar actual es global y relativamente amplia.
-- Tanto operaciones exitosas como fallidas se registran `BY ACCESS`.
-- `CREATE SESSION` está entre las opciones activas y es consistente con la generación de registros de conexión/desconexión que llenaron `AUD$` durante las importaciones masivas de 2019.
-- El problema actual no es una avalancha de auditoría reciente: desde 2020 el volumen anual es bajo. El problema principal es la retención histórica acumulada.
-- Antes de ejecutar `NOAUDIT` o purgar `SYS.AUD$`, debe completarse el inventario de las demás categorías de auditoría tradicional.
-- No se desactivará todavía ninguna protección útil; posteriormente se evaluará una política más selectiva, por ejemplo conservar auditoría de fallos y de operaciones administrativas sensibles mientras se evita registrar actividad rutinaria que no tenga valor operativo.
-
-## Siguiente diagnóstico autorizado
-
-Inventariar auditoría por privilegios del sistema:
+Se ejecutó, solo lectura:
 
 ```sql
 SELECT user_name, proxy_name, privilege, success, failure FROM dba_priv_audit_opts ORDER BY user_name, proxy_name, privilege;
 ```
 
+Resultado: **23 privilegios**.
+
+También aquí `USER_NAME` y `PROXY_NAME` aparecen vacíos en todas las filas observadas: la configuración es global.
+
+Todas las filas aparecen con:
+
+```text
+SUCCESS = BY ACCESS
+FAILURE = BY ACCESS
+```
+
+Privilegios observados:
+
+```text
+ALTER ANY PROCEDURE
+ALTER ANY TABLE
+ALTER DATABASE
+ALTER PROFILE
+ALTER SYSTEM
+ALTER USER
+AUDIT SYSTEM
+CREATE ANY JOB
+CREATE ANY LIBRARY
+CREATE ANY PROCEDURE
+CREATE ANY TABLE
+CREATE EXTERNAL JOB
+CREATE PUBLIC DATABASE LINK
+CREATE SESSION
+CREATE USER
+DROP ANY PROCEDURE
+DROP ANY TABLE
+DROP PROFILE
+DROP USER
+EXEMPT ACCESS POLICY
+GRANT ANY OBJECT PRIVILEGE
+GRANT ANY PRIVILEGE
+GRANT ANY ROLE
+```
+
+## Interpretación consolidada
+
+- La auditoría tradicional actual es global y relativamente amplia.
+- Tanto operaciones exitosas como fallidas se registran `BY ACCESS`.
+- `CREATE SESSION` está auditado y es coherente con el gran número histórico de eventos de conexión generados por los imports de 2019.
+- Existen además múltiples privilegios administrativos sensibles auditados globalmente; no deben desactivarse de forma indiscriminada.
+- El problema actual sigue siendo principalmente la retención histórica acumulada, no una generación reciente masiva.
+- Antes de ejecutar `NOAUDIT` o purgar `SYS.AUD$`, debe cerrarse el inventario con la auditoría por objetos.
+- La política futura deberá distinguir entre actividad rutinaria de poco valor operativo (por ejemplo conexiones exitosas normales) y eventos administrativos o fallidos que sí conviene conservar.
+
+## Siguiente diagnóstico autorizado
+
+Inventariar únicamente objetos que tengan alguna opción de auditoría activa:
+
+```sql
+SELECT owner, object_name, object_type, alt, aud, com, del, gra, ind, ins, loc, ren, sel, upd, ref, exe FROM dba_obj_audit_opts WHERE alt <> '-/-' OR aud <> '-/-' OR com <> '-/-' OR del <> '-/-' OR gra <> '-/-' OR ind <> '-/-' OR ins <> '-/-' OR loc <> '-/-' OR ren <> '-/-' OR sel <> '-/-' OR upd <> '-/-' OR ref <> '-/-' OR exe <> '-/-' ORDER BY owner, object_name;
+```
+
 Objetivos:
 
-- determinar si existen privilegios del sistema auditados adicionalmente a las 28 opciones de sentencia;
-- distinguir auditoría global de auditoría por usuario/proxy;
-- evitar desactivar accidentalmente controles de seguridad relevantes;
-- completar el mapa de auditoría activa antes de diseñar retención, archivado y purga.
+- determinar si existe auditoría explícita sobre tablas, vistas, procedimientos u otros objetos;
+- completar el mapa de auditoría tradicional activa;
+- evitar que una futura simplificación de auditoría afecte controles específicos que pudieran ser útiles;
+- recién después diseñar una propuesta de retención, archivado previo y purga controlada.
 
 Estado: **resultado pendiente**.
 
