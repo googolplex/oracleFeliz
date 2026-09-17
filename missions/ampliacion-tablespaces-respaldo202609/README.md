@@ -111,14 +111,32 @@ Interpretación provisional:
 - En esta primera inspección no aparece un segmento de aplicación evidente ni un único objeto anómalo que justifique una modificación inmediata.
 - Se mantiene la política de no borrar ni mover objetos internos de `SYSAUX` sin diagnóstico específico.
 
+### Diagnóstico de `SYS.AUD$`
+
+La primera consulta propuesta fue:
+
+```sql
+SELECT (SELECT value FROM v$parameter WHERE name='audit_trail') audit_trail, COUNT(*) audit_rows, MIN(timestamp#) oldest_audit, MAX(timestamp#) newest_audit FROM sys.aud$;
+```
+
+En Oracle 11.2.0.1 produjo:
+
+```text
+ORA-00937: not a single-group group function
+```
+
+Causa: la expresión escalar que obtiene `AUDIT_TRAIL` se combinó en el mismo `SELECT` con funciones de grupo sobre `SYS.AUD$`, sin `GROUP BY`.
+
+No hubo modificación de datos ni efecto sobre la base.
+
 ### Siguiente diagnóstico autorizado
 
 Prioridad inmediata: caracterizar `SYS.AUD$` antes de continuar con decisiones sobre `SYSTEM`.
 
-Consulta solicitada, solo lectura:
+Consulta corregida, solo lectura, separando la lectura del parámetro y los agregados en dos subconsultas de una fila:
 
 ```sql
-SELECT (SELECT value FROM v$parameter WHERE name='audit_trail') audit_trail, COUNT(*) audit_rows, MIN(timestamp#) oldest_audit, MAX(timestamp#) newest_audit FROM sys.aud$;
+SELECT p.value audit_trail, a.audit_rows, a.oldest_audit, a.newest_audit FROM (SELECT value FROM v$parameter WHERE name='audit_trail') p CROSS JOIN (SELECT COUNT(*) audit_rows, MIN(timestamp#) oldest_audit, MAX(timestamp#) newest_audit FROM sys.aud$) a;
 ```
 
 Objetivos:
