@@ -137,20 +137,59 @@ Hallazgos consolidados:
 - por tanto, existe evidencia fuerte de acumulación histórica prolongada y la presión de espacio de `SYSTEM` no debe interpretarse únicamente como crecimiento normal del diccionario;
 - todavía no se decide purga, retención ni movimiento del audit trail: primero se debe cuantificar su distribución temporal y el patrón reciente de crecimiento.
 
-### Siguiente diagnóstico autorizado
+### Distribución anual del audit trail
 
-Consulta de solo lectura para cuantificar las entradas del audit trail por año:
+Se ejecutó:
 
 ```sql
 SELECT TO_CHAR(timestamp,'YYYY') audit_year, COUNT(*) audit_rows FROM dba_audit_trail GROUP BY TO_CHAR(timestamp,'YYYY') ORDER BY audit_year;
 ```
 
+Resultado:
+
+```text
+2009         12
+2010     108921
+2011      25755
+2012      71626
+2013     113500
+2014     131065
+2015      14220
+2016      13939
+2017      12556
+2018       8764
+2019     708292
+2020       3704
+2021       1598
+2022        603
+2023        597
+2024        556
+2025        582
+2026        408
+```
+
+Interpretación:
+
+- `2019` concentra **708.292 filas**, aproximadamente **58%** de las 1.216.698 entradas actuales.
+- El volumen de auditoría cae de forma abrupta después de 2019.
+- Desde 2020 el crecimiento anual es muy bajo en comparación con los años previos; 2026 registra 408 entradas hasta 16-SEP-2026.
+- La ocupación actual de `SYS.AUD$` parece estar dominada por historia acumulada, especialmente por un evento o patrón excepcional de 2019, no por un crecimiento reciente acelerado.
+- Antes de diseñar una política de retención o purga conviene identificar si 2019 fue una generación sostenida durante todo el año o un pico concentrado en uno o pocos meses.
+- No eliminar todavía ninguna fila de `SYS.AUD$`.
+
+### Siguiente diagnóstico autorizado
+
+Consulta de solo lectura para distribuir las entradas de 2019 por mes:
+
+```sql
+SELECT TO_CHAR(timestamp,'YYYY-MM') audit_month, COUNT(*) audit_rows FROM dba_audit_trail WHERE timestamp >= DATE '2019-01-01' AND timestamp < DATE '2020-01-01' GROUP BY TO_CHAR(timestamp,'YYYY-MM') ORDER BY audit_month;
+```
+
 Objetivos:
 
-- medir cuántas filas corresponden a cada año entre 2009 y 2026;
-- identificar si la generación de auditoría es estable, creciente o concentrada en ciertos períodos;
-- estimar qué proporción del volumen corresponde a historia antigua frente a actividad reciente;
-- usar esa evidencia posteriormente para diseñar una política de retención/archivado/purga segura, sin ejecutar aún ninguna eliminación.
+- localizar el período exacto que explica las 708.292 entradas de 2019;
+- distinguir una generación sostenida de auditoría frente a un pico puntual;
+- decidir posteriormente si hace falta revisar acciones auditadas, usuarios o procesos concretos antes de definir retención/archivado/purga.
 
 Estado: **resultado pendiente**.
 
