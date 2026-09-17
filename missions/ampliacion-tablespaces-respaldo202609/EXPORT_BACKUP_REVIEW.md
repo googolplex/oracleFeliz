@@ -8,7 +8,7 @@ Revisar el mecanismo histórico de exports `.dmp` generado desde el propio CentO
 
 ## Programación encontrada
 
-El `crontab` del usuario `oracle` contiene:
+El `crontab` del usuario `oracle` contenía inicialmente:
 
 ```text
 0 2 * * 1-5 /home/oracle/exportar_kanela_full_v2.sh  > /home/oracle/exportar_kanela_full_v2.log  2>&1          #exportar kanela full
@@ -17,12 +17,30 @@ El `crontab` del usuario `oracle` contiene:
 Interpretación confirmada:
 
 - existe un mecanismo automatizado de export lógico Oracle;
-- se ejecuta de lunes a viernes;
+- originalmente se ejecutaba de lunes a viernes;
 - horario programado: 02:00;
 - script: `/home/oracle/exportar_kanela_full_v2.sh`;
 - log: `/home/oracle/exportar_kanela_full_v2.log`;
 - el comentario histórico lo identifica como `exportar kanela full`;
 - la ejecución se realiza desde dentro de CentOS, bajo el entorno del usuario `oracle`.
+
+## Ajuste de frecuencia — 2026-09-16
+
+Dado que `orcl` es actualmente una base histórica y el usuario considera suficiente un export semanal, se redujo la frecuencia sin modificar el script ni el mecanismo de export.
+
+La entrada actual verificada con `crontab -l` es:
+
+```text
+0 2 * * 1 /home/oracle/exportar_kanela_full_v2.sh  > /home/oracle/exportar_kanela_full_v2.log  2>&1          #exportar kanela full
+```
+
+Por tanto, el export full queda programado **una vez por semana, todos los lunes a las 02:00**.
+
+Antes del cambio se generó una copia del crontab en:
+
+```text
+/home/oracle/crontab_oracle_20260916.backup
+```
 
 ## Contenido del script `exportar_kanela_full_v2.sh`
 
@@ -117,12 +135,12 @@ La ausencia de un parámetro explícito de consistencia queda anotada para evalu
 El esquema histórico era de varias capas:
 
 1. respaldo de la máquina virtual;
-2. export lógico Oracle programado de lunes a viernes;
+2. export lógico Oracle actualmente programado una vez por semana;
 3. generación del `.dmp` sobre almacenamiento remoto montado por SSHFS;
 4. segunda copia versionada por `scp` a otro destino.
 
-Esto aportaba independencia entre recuperación de VM y recuperación lógica de objetos/datos Oracle.
+Esto aporta independencia entre recuperación de VM y recuperación lógica de objetos/datos Oracle.
 
 ## Estado
 
-Revisión abierta. Próximo paso: inspeccionar en modo solo lectura las últimas líneas de `/home/oracle/exportar_kanela_full_v2.log` para determinar si los exports terminaban con éxito, advertencias o errores y confirmar el comportamiento real de las ejecuciones más recientes.
+Frecuencia del export ajustada y verificada. El mecanismo queda activo semanalmente los lunes a las 02:00. La revisión del log histórico y de los `.dmp` existentes puede hacerse más adelante si se considera necesario.
