@@ -109,8 +109,6 @@ Interpretación provisional:
 
 ### Diagnóstico de `SYS.AUD$`
 
-La primera consulta combinada produjo `ORA-00937: not a single-group group function`. Fue corregida separando la lectura de `AUDIT_TRAIL` y los agregados en subconsultas de una fila. No hubo modificación de datos ni efecto sobre la base.
-
 La consulta corregida confirmó:
 
 ```text
@@ -134,18 +132,11 @@ Hallazgos consolidados:
 - existen **1.216.698 filas** en `SYS.AUD$`;
 - `SYS.AUD$` ocupa aproximadamente **250 MB** dentro de `SYSTEM`;
 - la auditoría retenida abarca desde **15-AGO-2009** hasta **16-SEP-2026**, más de 17 años de historia;
-- por tanto, existe evidencia fuerte de acumulación histórica prolongada y la presión de espacio de `SYSTEM` no debe interpretarse únicamente como crecimiento normal del diccionario;
-- todavía no se decide purga, retención ni movimiento del audit trail: primero se debe cuantificar su distribución temporal y el patrón reciente de crecimiento.
+- existe evidencia fuerte de acumulación histórica prolongada y la presión de espacio de `SYSTEM` no debe interpretarse únicamente como crecimiento normal del diccionario.
 
 ### Distribución anual del audit trail
 
-Se ejecutó:
-
-```sql
-SELECT TO_CHAR(timestamp,'YYYY') audit_year, COUNT(*) audit_rows FROM dba_audit_trail GROUP BY TO_CHAR(timestamp,'YYYY') ORDER BY audit_year;
-```
-
-Resultado:
+Resultado por año:
 
 ```text
 2009         12
@@ -172,24 +163,52 @@ Interpretación:
 
 - `2019` concentra **708.292 filas**, aproximadamente **58%** de las 1.216.698 entradas actuales.
 - El volumen de auditoría cae de forma abrupta después de 2019.
-- Desde 2020 el crecimiento anual es muy bajo en comparación con los años previos; 2026 registra 408 entradas hasta 16-SEP-2026.
-- La ocupación actual de `SYS.AUD$` parece estar dominada por historia acumulada, especialmente por un evento o patrón excepcional de 2019, no por un crecimiento reciente acelerado.
-- Antes de diseñar una política de retención o purga conviene identificar si 2019 fue una generación sostenida durante todo el año o un pico concentrado en uno o pocos meses.
-- No eliminar todavía ninguna fila de `SYS.AUD$`.
+- Desde 2020 el crecimiento anual es muy bajo; la ocupación actual está dominada por historia acumulada y no por crecimiento reciente acelerado.
 
-### Siguiente diagnóstico autorizado
+### Distribución mensual de 2019
 
-Consulta de solo lectura para distribuir las entradas de 2019 por mes:
+Se ejecutó:
 
 ```sql
 SELECT TO_CHAR(timestamp,'YYYY-MM') audit_month, COUNT(*) audit_rows FROM dba_audit_trail WHERE timestamp >= DATE '2019-01-01' AND timestamp < DATE '2020-01-01' GROUP BY TO_CHAR(timestamp,'YYYY-MM') ORDER BY audit_month;
 ```
 
+Resultado:
+
+```text
+2019-01    328344
+2019-06    377205
+2019-07       503
+2019-08       475
+2019-09       468
+2019-10       327
+2019-11       367
+2019-12       603
+```
+
+Interpretación:
+
+- enero de 2019 contiene **328.344** registros;
+- junio de 2019 contiene **377.205** registros;
+- juntos suman **705.549** registros de los **708.292** del año, aproximadamente **99,6%**;
+- por tanto, el pico de 2019 no fue sostenido: estuvo concentrado casi por completo en dos episodios puntuales, enero y junio;
+- desde julio de 2019 el nivel vuelve a cientos de registros mensuales, coherente con el patrón bajo observado desde 2020;
+- antes de considerar retención/purga se debe identificar qué combinación de usuario, acción y código de retorno generó esos dos episodios masivos.
+
+### Siguiente diagnóstico autorizado
+
+Consulta de solo lectura para identificar los principales generadores de auditoría en enero y junio de 2019:
+
+```sql
+SELECT * FROM (SELECT TO_CHAR(timestamp,'YYYY-MM') audit_month, NVL(username,'<NULL>') username, NVL(action_name,'<NULL>') action_name, returncode, COUNT(*) audit_rows FROM dba_audit_trail WHERE (timestamp >= DATE '2019-01-01' AND timestamp < DATE '2019-02-01') OR (timestamp >= DATE '2019-06-01' AND timestamp < DATE '2019-07-01') GROUP BY TO_CHAR(timestamp,'YYYY-MM'), NVL(username,'<NULL>'), NVL(action_name,'<NULL>'), returncode ORDER BY audit_rows DESC) WHERE ROWNUM <= 30;
+```
+
 Objetivos:
 
-- localizar el período exacto que explica las 708.292 entradas de 2019;
-- distinguir una generación sostenida de auditoría frente a un pico puntual;
-- decidir posteriormente si hace falta revisar acciones auditadas, usuarios o procesos concretos antes de definir retención/archivado/purga.
+- identificar el usuario o usuarios responsables de los picos;
+- identificar la acción auditada predominante;
+- distinguir operaciones exitosas de errores repetitivos mediante `RETURNCODE`;
+- decidir si hace falta profundizar por host, objeto o sesión antes de diseñar cualquier política de retención/archivado/purga.
 
 Estado: **resultado pendiente**.
 
