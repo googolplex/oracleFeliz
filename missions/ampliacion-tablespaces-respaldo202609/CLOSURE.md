@@ -6,6 +6,10 @@ Fecha: 2026-09-16
 
 La base `orcl` es una base histórica que ya no se utiliza operativamente. El objetivo principal era volver a ponerla en marcha, validar que pudiera operar nuevamente y, posteriormente, liberar espacio innecesariamente ocupado por auditoría histórica y evaluar si existen datafiles sobredimensionados que puedan devolver espacio al filesystem.
 
+### Preferencia de interacción
+
+El usuario indicó expresamente que **puede ser tuteado** durante el trabajo del proyecto. Se puede usar trato de `tú` de forma natural en las respuestas y comandos explicados.
+
 ## Estado final / fase de optimización posterior
 
 - Base `orcl` recuperada y operativa (`OPEN`, `ACTIVE`, `READ WRITE`).
@@ -164,7 +168,7 @@ diag/rdbms/orcl/orcl
 diag/tnslsnr/kanela/listener
 ```
 
-Para la base se fijó explícitamente `diag/rdbms/orcl/orcl` antes de cualquier futura purga.
+Para la base se fijó explícitamente `diag/rdbms/orcl/orcl` antes de cualquier purga.
 
 ### Política ADR actual
 
@@ -237,7 +241,52 @@ Archivos asociados:
 /home/oracle/app/oracle/diag/rdbms/orcl/orcl/incident/incdir_1405071/orcl_m000_3559_i1405071.trc
 ```
 
-El incidente apunta a **datafile 2, bloque 76214**, es decir, al `SYSAUX` que fue objeto de la reparación AWR/LOB. Sin embargo, dado que ese datafile ya fue validado posteriormente con RMAN y `Blocks Failing = 0`, no se debe concluir solo a partir del ADR que el bloque continúe corrupto. El siguiente paso es comprobar el estado actual en `V$DATABASE_BLOCK_CORRUPTION` antes de purgar los incidentes.
+El incidente apunta a **datafile 2, bloque 76214**, es decir, al `SYSAUX` que fue objeto de la reparación AWR/LOB.
+
+### Estado actual del bloque 2/76214
+
+La consulta a `V$DATABASE_BLOCK_CORRUPTION` confirmó que Oracle aún registra:
+
+```text
+FILE#  BLOCK#  BLOCKS  CORRUPTION_CHANGE#  CORRUPTION_TYPE
+2      76214   1       3227698275          NOLOGGING
+```
+
+Sin embargo, la búsqueda exacta en `DBA_EXTENTS` para `file_id=2` y bloque `76214` devolvió:
+
+```text
+no rows selected
+```
+
+Interpretación operativa actual:
+
+- el bloque sigue apareciendo como `NOLOGGING` en la vista de corrupción;
+- actualmente **no pertenece a ningún extent visible ni a ningún segmento asignado**;
+- esto es coherente con la reparación/recreación previa del objeto afectado y reduce el riesgo operativo asociado a esa entrada residual;
+- no se ejecutará `BLOCKRECOVER` sobre este bloque sin nueva evidencia que demuestre que pertenece a un objeto activo.
+
+### Purga controlada de incidentes ADR
+
+Se decidió conservar los incidentes de los últimos **7 días** y purgar únicamente los anteriores mediante el mecanismo soportado de ADRCI:
+
+```text
+HOST $ORACLE_HOME/bin/adrci exec="set homepath diag/rdbms/orcl/orcl; purge -age 10080 -type incident"
+```
+
+`10080` corresponde a 7 días expresados en minutos.
+
+Durante la ejecución se verificó desde otra sesión que el proceso estaba activo:
+
+```text
+oracle 8075 7679 65 21:03 pts/1 00:00:29 adrci ... purge -age 10080 -type incident
+```
+
+Por tanto:
+
+- la purga estaba efectivamente procesando contenido y no se consideró colgada;
+- se observó aproximadamente **65% de CPU** en ese momento;
+- no se interrumpió el proceso;
+- el resultado final y el espacio efectivamente recuperado quedan pendientes de medición cuando ADRCI devuelva el prompt.
 
 ## Acciones no realizadas todavía
 
@@ -251,10 +300,10 @@ El incidente apunta a **datafile 2, bloque 76214**, es decir, al `SYSAUX` que fu
 - no eliminar respaldos;
 - no modificar `AUTOEXTEND`;
 - no se borraron manualmente archivos del ADR;
-- no se ejecutó todavía `adrci purge`.
+- no se ejecutó `BLOCKRECOVER` sobre el bloque residual 2/76214.
 
 ## Estado de la misión
 
 **BASE RECUPERADA / FASE DE LIBERACIÓN DE ESPACIO ABIERTA.**
 
-La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, se devolvieron aproximadamente **12,06 GiB físicos al filesystem** mediante la reducción controlada de `UNDOTBS1`, y se identificó una nueva oportunidad de recuperación mucho mayor: **~41 GB acumulados en el directorio ADR `incident`**, pendientes de confirmar el estado actual del bloque 2/76214 y luego realizar una purga controlada con `adrci`.
+La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, se devolvieron aproximadamente **12,06 GiB físicos al filesystem** mediante la reducción controlada de `UNDOTBS1`, y se inició una purga controlada de los incidentes ADR mayores de 7 días para recuperar la mayor parte de los **~41 GB** acumulados en `incident`. El resultado físico final de esta purga queda pendiente de medición.
