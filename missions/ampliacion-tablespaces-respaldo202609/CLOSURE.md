@@ -51,7 +51,7 @@ UNDOTBS1    13370.00     28.75   13341.25      0.22
 USERS           5.00      4.06       0.94     81.25
 ```
 
-Totales actuales:
+Totales en ese momento:
 
 - capacidad asignada en datafiles: **58.892,98 MB** (~57,51 GiB);
 - espacio usado: **16.747,55 MB** (~16,36 GiB);
@@ -64,11 +64,11 @@ Comparación de `SYSTEM` antes/después:
 - libre después: **256,31 MB**;
 - espacio liberado por `TRUNCATE SYS.AUD$`: **249,93 MB**.
 
-Este espacio quedó reutilizable dentro de Oracle. El tamaño físico de `system01.dbf` no cambió, por lo que esta acción no devolvió todavía esos ~250 MB al filesystem.
+Este espacio quedó reutilizable dentro de Oracle. El tamaño físico de `system01.dbf` no cambió, por lo que esta acción no devolvió por sí sola esos ~250 MB al filesystem.
 
 ## Candidatos para devolver espacio al filesystem
 
-Los mayores márgenes internos son:
+Los mayores márgenes internos identificados fueron:
 
 - `TABLAS`: **18.276,31 MB** libres (~17,85 GiB);
 - `UNDOTBS1`: **13.341,25 MB** libres (~13,03 GiB);
@@ -88,7 +88,7 @@ HWM_MB                  427
 POTENTIAL_RECLAIM_MB  12943
 ```
 
-La distribución actual de extents de undo es:
+La distribución observada de extents de undo fue:
 
 ```text
 STATUS      EXTENTS   MB
@@ -96,23 +96,41 @@ EXPIRED          33   6.75
 UNEXPIRED        14  21.00
 ```
 
-No se observan extents `ACTIVE`.
+No se observaron extents `ACTIVE`.
 
-Interpretación:
+Interpretación previa a la ejecución:
 
-- el datafile está fuertemente sobredimensionado para el uso actual;
-- el HWM está en solo **427 MB**;
-- no existen extents de undo activos al momento de la consulta;
-- solo existen **21 MB UNEXPIRED** y **6,75 MB EXPIRED**;
-- un objetivo conservador de **1024 MB (1 GiB)** queda muy por encima del HWM observado y dejaría margen amplio;
-- reducir de 13.370 MB a 1.024 MB devolvería aproximadamente **12.346 MB (~12,06 GiB)** al filesystem, sujeto a que Oracle acepte el `RESIZE` y no exista un cambio concurrente en el HWM.
+- el datafile estaba fuertemente sobredimensionado para el uso actual;
+- el HWM estaba en solo **427 MB**;
+- no existían extents de undo activos al momento de la consulta;
+- solo existían **21 MB UNEXPIRED** y **6,75 MB EXPIRED**;
+- se eligió un objetivo conservador de **1024 MB (1 GiB)**, muy por encima del HWM observado.
 
-Oracle 11g permite redimensionar datafiles de undo con `ALTER DATABASE ... DATAFILE ... RESIZE`; si existieran bloques asignados por encima del tamaño solicitado, Oracle rechazaría la operación.
+### Reducción ejecutada con éxito
 
-## Acciones explícitamente no realizadas todavía
+Se ejecutó:
+
+```sql
+ALTER DATABASE DATAFILE '/home/oracle/app/oracle/oradata/orcl/undotbs01.dbf' RESIZE 1024M;
+```
+
+Resultado confirmado por SQL*Plus:
+
+```text
+Database altered.
+```
+
+Consecuencia:
+
+- `UNDOTBS1` pasó de **13.370 MB** a **1.024 MB**;
+- se devolvieron aproximadamente **12.346 MB (~12,06 GiB)** al filesystem;
+- la operación fue aceptada por Oracle sin error;
+- el nuevo tamaño sigue dejando un margen amplio por encima del HWM observado de 427 MB.
+
+## Acciones no realizadas todavía
 
 - no ampliar `TABLAS`;
-- no reducir datafiles todavía;
+- no reducir aún `AMANDA` ni `TABLAS`;
 - no mover `AUD$`;
 - no ejecutar `DBMS_AUDIT_MGMT.INIT_CLEANUP`;
 - no ejecutar `NOAUDIT`;
@@ -125,4 +143,4 @@ Oracle 11g permite redimensionar datafiles de undo con `ALTER DATABASE ... DATAF
 
 **BASE RECUPERADA / FASE DE LIBERACIÓN DE ESPACIO ABIERTA.**
 
-La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, y `UNDOTBS1` fue identificado como candidato fuerte para devolver alrededor de **12,06 GiB** físicos al filesystem mediante un `RESIZE` conservador a 1 GiB, previa ejecución controlada.
+La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, y además se devolvieron aproximadamente **12,06 GiB físicos al filesystem** mediante la reducción controlada de `UNDOTBS1` de 13.370 MB a 1.024 MB.
