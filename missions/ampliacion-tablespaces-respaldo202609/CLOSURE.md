@@ -76,7 +76,39 @@ Los mayores márgenes internos son:
 
 No se debe inferir que todo ese espacio sea inmediatamente reducible: para devolver espacio físico al sistema operativo hay que verificar el high-water mark de cada datafile y, especialmente en `UNDOTBS1`, la distribución/estado de extents de undo.
 
-El primer candidato para diagnóstico es `AMANDA`, porque el datafile asigna 10 GB y solo contiene ~103 MB usados. Antes de cualquier `RESIZE` se medirá su HWM exacto.
+## Diagnóstico de `UNDOTBS1`
+
+El usuario priorizó revisar `UNDOTBS1` antes que `AMANDA`.
+
+Consulta de HWM ejecutada sobre el datafile 3:
+
+```text
+FILE_ID       3
+FILE_NAME     /home/oracle/app/oracle/oradata/orcl/undotbs01.dbf
+CURRENT_MB    13370
+HWM_MB        427
+POTENTIAL_RECLAIM_MB 12943
+```
+
+Interpretación:
+
+- el datafile físico mide **13.370 MB**;
+- el último bloque actualmente asignado está alrededor de **427 MB**;
+- existen **12.943 MB** (~12,64 GiB) por encima del HWM;
+- ese espacio es candidato real a ser devuelto al filesystem mediante `ALTER DATABASE ... DATAFILE ... RESIZE`, pero todavía no se ejecuta;
+- al tratarse del undo tablespace activo, antes del `RESIZE` se verificará la distribución de extents `ACTIVE`, `UNEXPIRED` y `EXPIRED` y se dejará margen por encima del HWM.
+
+Oracle 11g soporta el redimensionamiento de datafiles de un undo tablespace mediante `ALTER DATABASE ... DATAFILE ... RESIZE`. La vista `DBA_UNDO_EXTENTS` informa el estado `ACTIVE`, `UNEXPIRED` o `EXPIRED` de los extents.
+
+## Siguiente diagnóstico autorizado
+
+Medir la distribución actual del undo por estado:
+
+```sql
+SELECT status, COUNT(*) extents, ROUND(SUM(bytes)/1024/1024,2) mb FROM dba_undo_extents WHERE tablespace_name='UNDOTBS1' GROUP BY status ORDER BY status;
+```
+
+No ejecutar todavía `RESIZE`.
 
 ## Acciones explícitamente no realizadas todavía
 
@@ -94,4 +126,4 @@ El primer candidato para diagnóstico es `AMANDA`, porque el datafile asigna 10 
 
 **BASE RECUPERADA / FASE DE LIBERACIÓN DE ESPACIO ABIERTA.**
 
-La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, y se identificaron datafiles con potencial importante para devolver espacio físico al filesystem tras validar sus HWM de forma individual.
+La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, y `UNDOTBS1` presenta ahora un potencial medido de **12.943 MB** (~12,64 GiB) por encima de su HWM, sujeto a una última verificación de estado de extents antes de redimensionar.
