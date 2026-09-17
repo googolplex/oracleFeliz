@@ -265,7 +265,7 @@ Interpretación operativa actual:
 - esto es coherente con la reparación/recreación previa del objeto afectado y reduce el riesgo operativo asociado a esa entrada residual;
 - no se ejecutará `BLOCKRECOVER` sobre este bloque sin nueva evidencia que demuestre que pertenece a un objeto activo.
 
-### Purga controlada de incidentes ADR
+### Purga controlada de incidentes ADR — completada
 
 Se decidió conservar los incidentes de los últimos **7 días** y purgar únicamente los anteriores mediante el mecanismo soportado de ADRCI:
 
@@ -281,12 +281,42 @@ Durante la ejecución se verificó desde otra sesión que el proceso estaba acti
 oracle 8075 7679 65 21:03 pts/1 00:00:29 adrci ... purge -age 10080 -type incident
 ```
 
+La purga terminó correctamente. La medición posterior fue:
+
+```text
+1013M  /home/oracle/app/oracle/diag/rdbms/orcl/orcl/incident
+```
+
+Comparación aproximada:
+
+- `incident` antes: **~41 GB**;
+- `incident` después: **1013 MB (~0,99 GiB)**;
+- espacio recuperado en ese directorio: **aproximadamente 40 GB**.
+
+No se borraron directorios manualmente con `rm`; la limpieza se realizó con ADRCI y mantuvo los incidentes de los últimos 7 días.
+
+### Efecto final sobre el filesystem raíz
+
+Antes de las principales acciones de liberación, `/` se encontraba aproximadamente en:
+
+```text
+102G total, 75G usados, 23G disponibles, 77% usado
+```
+
+Después de reducir `UNDOTBS1` y completar la purga ADR:
+
+```text
+Filesystem            Size  Used Avail Use% Mounted on
+/dev/mapper/VolGroup00-LogVol00
+                      102G   23G   74G  24% /
+```
+
 Por tanto:
 
-- la purga estaba efectivamente procesando contenido y no se consideró colgada;
-- se observó aproximadamente **65% de CPU** en ese momento;
-- no se interrumpió el proceso;
-- el resultado final y el espacio efectivamente recuperado quedan pendientes de medición cuando ADRCI devuelva el prompt.
+- espacio disponible pasó de **~23 GB a ~74 GB**;
+- aumento observado de espacio disponible: **~51 GB**;
+- uso del filesystem cayó de **~77% a 24%**;
+- la diferencia es coherente, dentro del redondeo de `df -h`, con los **~12,06 GiB** recuperados al reducir `UNDOTBS1` más los **~40 GB** liberados del directorio ADR `incident`.
 
 ## Acciones no realizadas todavía
 
@@ -321,6 +351,6 @@ La misma disciplina se reutiliza hoy en otros dominios, especialmente en proyect
 
 ## Estado de la misión
 
-**BASE RECUPERADA / FASE DE LIBERACIÓN DE ESPACIO ABIERTA.**
+**BASE RECUPERADA / LIBERACIÓN MAYOR DE ESPACIO COMPLETADA.**
 
-La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, se devolvieron aproximadamente **12,06 GiB físicos al filesystem** mediante la reducción controlada de `UNDOTBS1`, y se inició una purga controlada de los incidentes ADR mayores de 7 días para recuperar la mayor parte de los **~41 GB** acumulados en `incident`. El resultado físico final de esta purga queda pendiente de medición.
+La base quedó nuevamente operativa. La auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, recuperando **249,93 MB internos en `SYSTEM`**; se devolvieron aproximadamente **12,06 GiB físicos** mediante la reducción controlada de `UNDOTBS1`; y la purga soportada de ADRCI redujo `incident` de **~41 GB a ~1 GB**, liberando aproximadamente **40 GB** adicionales. En conjunto, el filesystem raíz pasó de **~23 GB disponibles (77% usado)** a **~74 GB disponibles (24% usado)**, un aumento observado de aproximadamente **51 GB libres**.
