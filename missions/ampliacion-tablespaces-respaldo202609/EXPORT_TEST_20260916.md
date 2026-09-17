@@ -133,13 +133,79 @@ Por tanto:
 - autenticación por clave RSA del usuario `oracle` hacia `root@zapallo` funcional;
 - el problema ya no es un fallo SSH general.
 
-## Estado actual
+## Validación SSHFS
+
+Se ejecutó:
+
+```text
+sshfs root@zapallo:/picornavirales/images.backup /picornavirales
+```
+
+sin error.
+
+Luego:
+
+```text
+mountpoint /picornavirales
+```
+
+confirmó:
+
+```text
+/picornavirales is a mountpoint
+```
+
+## Corrección del destino final de `scp`
+
+Se comprobó que la IP histórica `192.168.0.71` ya no era alcanzable:
+
+```text
+ssh: connect to host 192.168.0.71 port 22: No route to host
+```
+
+El destino actual fue validado en `zapallo`:
+
+```text
+/camalote/images.backup
+```
+
+Antes de modificar el script se creó:
+
+```text
+/home/oracle/exportar_kanela_full_v2.sh.20260916.backup
+```
+
+La línea de `scp` quedó actualizada a:
+
+```text
+scp /picornavirales/export_kanela_full.dmp root@zapallo:/camalote/images.backup/export_$sufijo.dmp
+```
+
+## Prueba final
+
+Se relanzó `/home/oracle/exportar_kanela_full_v2.sh` y el FULL export comenzó efectivamente a recorrer/exportar la base.
+
+Durante la ejecución apareció:
+
+```text
+EXP-00097: Object type "ADMIN"."JS_MENSAJE_TABLE" is not in a valid state, type will not be exported
+```
+
+Este objeto inválido queda como pendiente no bloqueante de revisión posterior.
+
+La ejecución completa es de larga duración. El usuario confirmó visualmente que el export estaba funcionando y solicitó considerar recuperado el mecanismo sin esperar en esta sesión el mensaje final del proceso.
+
+## Estado final
 
 - Oracle Net/TNS: **RESUELTO**.
 - Registro dinámico del servicio Oracle: **RESUELTO**.
 - Resolución y autenticación SSH hacia `zapallo`: **RESUELTAS**.
-- Falta validar específicamente el montaje `sshfs` del directorio remoto `/picornavirales/images.backup` sobre `/picornavirales` antes de repetir el export full completo.
+- SSHFS: **VALIDADO**.
+- Destino final `scp`: **CORREGIDO Y VALIDADO**.
+- FULL export: **EJECUTÁNDOSE / MECANISMO CONSIDERADO FUNCIONAL POR EL USUARIO**.
 
-## Próximo paso
+La reparación completa y su trazabilidad quedaron consolidadas en:
 
-Probar manualmente el mismo montaje SSHFS que utiliza el script, sin lanzar todavía `exp`, y verificar que `/picornavirales` quede correctamente montado.
+```text
+missions/reparacion-export-full202609/mission-01-reparacion-export-full.md
+```
