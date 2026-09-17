@@ -167,12 +167,6 @@ Interpretación:
 
 ### Distribución mensual de 2019
 
-Se ejecutó:
-
-```sql
-SELECT TO_CHAR(timestamp,'YYYY-MM') audit_month, COUNT(*) audit_rows FROM dba_audit_trail WHERE timestamp >= DATE '2019-01-01' AND timestamp < DATE '2020-01-01' GROUP BY TO_CHAR(timestamp,'YYYY-MM') ORDER BY audit_month;
-```
-
 Resultado:
 
 ```text
@@ -191,24 +185,48 @@ Interpretación:
 - enero de 2019 contiene **328.344** registros;
 - junio de 2019 contiene **377.205** registros;
 - juntos suman **705.549** registros de los **708.292** del año, aproximadamente **99,6%**;
-- por tanto, el pico de 2019 no fue sostenido: estuvo concentrado casi por completo en dos episodios puntuales, enero y junio;
-- desde julio de 2019 el nivel vuelve a cientos de registros mensuales, coherente con el patrón bajo observado desde 2020;
-- antes de considerar retención/purga se debe identificar qué combinación de usuario, acción y código de retorno generó esos dos episodios masivos.
+- por tanto, el pico de 2019 no fue sostenido: estuvo concentrado casi por completo en dos episodios puntuales, enero y junio.
+
+### Origen de los picos de enero y junio de 2019
+
+Se agruparon los eventos por mes, usuario, acción y `RETURNCODE`.
+
+Principales resultados:
+
+```text
+2019-06 ADMIN  LOGON   0   188646
+2019-06 ADMIN  LOGOFF  0   188339
+2019-01 ADMIN  LOGON   0   163935
+2019-01 ADMIN  LOGOFF  0   163763
+```
+
+El resto de combinaciones aparece solo en cantidades pequeñas comparadas con `ADMIN`.
+
+Interpretación:
+
+- enero de 2019: `ADMIN` produjo **327.698** eventos `LOGON` + `LOGOFF` exitosos, aproximadamente **99,8%** de todos los registros del mes;
+- junio de 2019: `ADMIN` produjo **376.985** eventos `LOGON` + `LOGOFF` exitosos, aproximadamente **99,94%** de todos los registros del mes;
+- combinados, son **704.683 eventos**, aproximadamente **99,88%** de los 705.549 registros de ambos meses;
+- `RETURNCODE=0` demuestra que se trató predominantemente de conexiones exitosas, no de errores masivos de autenticación;
+- los pocos `RETURNCODE=1017` observados son marginales y no explican la ocupación histórica;
+- el patrón es consistente con un proceso o aplicación que abría y cerraba sesiones Oracle de forma extremadamente frecuente usando la cuenta `ADMIN`;
+- no se infiere todavía qué aplicación o máquina era responsable: debe identificarse el origen mediante `USERHOST`, `OS_USERNAME` y `TERMINAL` antes de concluir la causa operativa.
 
 ### Siguiente diagnóstico autorizado
 
-Consulta de solo lectura para identificar los principales generadores de auditoría en enero y junio de 2019:
+Consulta de solo lectura para identificar el origen cliente de los `LOGON`/`LOGOFF` exitosos de `ADMIN` en enero y junio de 2019:
 
 ```sql
-SELECT * FROM (SELECT TO_CHAR(timestamp,'YYYY-MM') audit_month, NVL(username,'<NULL>') username, NVL(action_name,'<NULL>') action_name, returncode, COUNT(*) audit_rows FROM dba_audit_trail WHERE (timestamp >= DATE '2019-01-01' AND timestamp < DATE '2019-02-01') OR (timestamp >= DATE '2019-06-01' AND timestamp < DATE '2019-07-01') GROUP BY TO_CHAR(timestamp,'YYYY-MM'), NVL(username,'<NULL>'), NVL(action_name,'<NULL>'), returncode ORDER BY audit_rows DESC) WHERE ROWNUM <= 30;
+SELECT * FROM (SELECT TO_CHAR(timestamp,'YYYY-MM') audit_month, NVL(userhost,'<NULL>') userhost, NVL(os_username,'<NULL>') os_username, NVL(terminal,'<NULL>') terminal, action_name, COUNT(*) audit_rows FROM dba_audit_trail WHERE username='ADMIN' AND returncode=0 AND action_name IN ('LOGON','LOGOFF') AND ((timestamp >= DATE '2019-01-01' AND timestamp < DATE '2019-02-01') OR (timestamp >= DATE '2019-06-01' AND timestamp < DATE '2019-07-01')) GROUP BY TO_CHAR(timestamp,'YYYY-MM'), NVL(userhost,'<NULL>'), NVL(os_username,'<NULL>'), NVL(terminal,'<NULL>'), action_name ORDER BY audit_rows DESC) WHERE ROWNUM <= 30;
 ```
 
 Objetivos:
 
-- identificar el usuario o usuarios responsables de los picos;
-- identificar la acción auditada predominante;
-- distinguir operaciones exitosas de errores repetitivos mediante `RETURNCODE`;
-- decidir si hace falta profundizar por host, objeto o sesión antes de diseñar cualquier política de retención/archivado/purga.
+- identificar el host o hosts que originaron la avalancha de conexiones;
+- identificar, si está disponible, el usuario del sistema operativo y terminal cliente;
+- determinar si enero y junio provienen del mismo origen;
+- separar el diagnóstico histórico del problema actual: desde 2020 el volumen de auditoría es bajo;
+- solo después evaluar una política segura de retención/archivado/purga de `AUD$`.
 
 Estado: **resultado pendiente**.
 
