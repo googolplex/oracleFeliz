@@ -6,7 +6,7 @@ Fecha: 2026-09-16
 
 Revisar el mecanismo histórico de exports `.dmp` generado desde el propio CentOS de `kanela`, complementario a los respaldos automáticos de la máquina virtual entre `zapallo` y `cafe`.
 
-## Hallazgo inicial
+## Programación encontrada
 
 El `crontab` del usuario `oracle` contiene:
 
@@ -24,6 +24,84 @@ Interpretación confirmada:
 - el comentario histórico lo identifica como `exportar kanela full`;
 - la ejecución se realiza desde dentro de CentOS, bajo el entorno del usuario `oracle`.
 
+## Contenido del script `exportar_kanela_full_v2.sh`
+
+Se inspeccionó el script en modo solo lectura.
+
+### Entorno Oracle
+
+El script prepara explícitamente:
+
+- `ORACLE_HOSTNAME=kanela.eukarya.adelantos.com.py`;
+- `ORACLE_BASE=/home/oracle/app/oracle`;
+- `ORACLE_HOME=/home/oracle/app/oracle/product/11.2.0/dbhome_1`;
+- `ORACLE_SID=orcl`;
+- `ORACLE_UNQNAME=orcl`;
+- `NLS_LANG=AMERICAN_AMERICA.WE8MSWIN1252`;
+- `PATH`, `LD_LIBRARY_PATH` y `CLASSPATH` compatibles con Oracle 11g.
+
+### Tipo de export
+
+El mecanismo usa el utilitario clásico de Oracle:
+
+```text
+exp ... parfile=/home/oracle/exportar_kanela_full_v2.sql
+```
+
+Por tanto, se trata de **Oracle Export clásico (`exp`)**, no Data Pump (`expdp`). Aún falta inspeccionar el `parfile` para confirmar los parámetros exactos y verificar si efectivamente contiene `FULL=Y`.
+
+### Flujo de almacenamiento
+
+El script utiliza `/picornavirales` como punto de montaje temporal/intermedio.
+
+Si `/picornavirales` no está montado, ejecuta conceptualmente:
+
+```text
+sshfs root@zapallo:/picornavirales/images.backup /picornavirales
+```
+
+Luego elimina cualquier `export_kanela_full.dmp` previo y ejecuta el export. Esto indica que el `.dmp` intermedio se escribía sobre un filesystem accesible mediante SSHFS desde `kanela` hacia `zapallo`, en vez de quedar únicamente en el disco local de la VM.
+
+Después del export, si existe `/picornavirales/export_kanela_full.dmp`, el script realiza una segunda copia mediante `scp` hacia:
+
+```text
+root@192.168.0.71:/camalote/images.backup/export_<timestamp>.dmp
+```
+
+La dirección `192.168.0.71` y su relación actual con `zapallo`, `cafe` u otro host todavía no se consideran confirmadas; no se debe inferir identidad sin evidencia adicional.
+
+El nombre de la segunda copia incorpora fecha y hora mediante un sufijo `YYYYMMDD_HH_MM_SS`, por lo que esa etapa sí conserva versiones históricas diferenciadas.
+
+Finalmente el script elimina el `.dmp` intermedio de `/picornavirales` y desmonta el filesystem.
+
+### Notificaciones y control de ejecución
+
+El script envía un correo al inicio de la tarea indicando `exportar_kanela_full`.
+
+El control de éxito es simple:
+
+- no se observa `set -e`;
+- no se inspecciona explícitamente el código de retorno de `exp`;
+- la decisión de copiar se basa en la existencia del archivo `.dmp`;
+- la salida completa del cron queda redirigida a `/home/oracle/exportar_kanela_full_v2.log`.
+
+Por tanto, para evaluar la calidad histórica real de los exports será útil revisar posteriormente el `parfile`, el log del cron y los `.dmp` que aún existan en los destinos.
+
+### Credenciales
+
+El script contiene una credencial Oracle embebida en texto plano dentro de la invocación de `exp`. **La credencial no se copia ni se documenta en GitHub.** Este hallazgo se registra únicamente como una debilidad histórica de seguridad del script.
+
+## Lectura arquitectónica
+
+El esquema histórico era de varias capas:
+
+1. respaldo de la máquina virtual;
+2. export lógico Oracle programado de lunes a viernes;
+3. generación del `.dmp` sobre almacenamiento remoto montado por SSHFS;
+4. segunda copia versionada por `scp` a otro destino.
+
+Esto aportaba independencia entre recuperación de VM y recuperación lógica de objetos/datos Oracle.
+
 ## Estado
 
-Revisión abierta. Próximo paso: inspeccionar en modo solo lectura el contenido de `/home/oracle/exportar_kanela_full_v2.sh` para identificar si utiliza `exp`, `expdp`, destino de los `.dmp`, política de nombres/rotación, compresión y eventual copia a otro host.
+Revisión abierta. Próximo paso: inspeccionar en modo solo lectura `/home/oracle/exportar_kanela_full_v2.sql` para confirmar `FULL=Y`, destino efectivo del dump, buffers/estadísticas y demás parámetros del export clásico.
