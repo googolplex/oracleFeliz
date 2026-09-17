@@ -157,15 +157,87 @@ Luego se midió el ADR en filesystem:
 979M  trace
 ```
 
-Conclusión:
+Los homes conocidos por `adrci` son:
 
-- el directorio `incident` es, por amplio margen, el principal consumidor: **~41 GB**;
-- `trace` añade **~979 MB**;
-- `stage` añade **~176 MB**;
-- `alert` ocupa **~33 MB**;
-- los **17.217 incidentes activos** son coherentes con la enorme acumulación observada;
-- antes de borrar nada manualmente se usará `adrci`, ya que Oracle 11g soporta purga por edad y tipo de contenido ADR;
-- `PURGE` requiere trabajar con un único ADR home seleccionado, por lo que el siguiente paso es identificar los homes conocidos por `adrci` y seleccionar el correspondiente a `orcl` antes de purgar.
+```text
+diag/rdbms/orcl/orcl
+diag/tnslsnr/kanela/listener
+```
+
+Para la base se fijó explícitamente `diag/rdbms/orcl/orcl` antes de cualquier futura purga.
+
+### Política ADR actual
+
+`show control` devolvió:
+
+```text
+SHORTP_POLICY = 720 horas   (30 días)
+LONGP_POLICY  = 8760 horas  (365 días)
+LAST_AUTOPRG_TIME = 2026-09-15 22:17:56 -04:00
+```
+
+Por tanto, el autopurge está activo y se ejecutó recientemente. La enorme ocupación no se explica por un mecanismo totalmente inactivo, sino por la política de retención larga y por incidentes que siguen dentro de esa ventana.
+
+### Antigüedad de los directorios `incident`
+
+Distribución por mes observada en filesystem:
+
+```text
+2025-09   358
+2025-10   750
+2025-11   743
+2025-12   744
+2026-01   755
+2026-02   690
+2026-03   695
+2026-04   745
+2026-05   781
+2026-06   741
+2026-07   790
+2026-08   748
+2026-09   375
+```
+
+Total de directorios observados: **8.915**. Prácticamente todo cae dentro de los últimos 12 meses, coherente con `LONGP_POLICY=8760` horas.
+
+### Problemas registrados por ADR
+
+`show problem` devolvió 10 problemas históricos. Los más recientes son:
+
+```text
+PROBLEM_ID 4   ORA 1578                       LAST_INCIDENT 1405071  2026-09-16 11:00:23 -04:00
+PROBLEM_ID 10  ORA 353 [48544] [5946659360]  LAST_INCIDENT 1366317  2026-03-22 06:00:49 -04:00
+```
+
+Los demás corresponden a eventos históricos de 2011–2020 (`ORA-445`, `ORA-7445`, varios `ORA-600`, `ORA-3137`).
+
+### Detalle del último `ORA-1578`
+
+Se inspeccionó el incidente `1405071` con `adrci` y se obtuvo:
+
+```text
+INCIDENT_ID   1405071
+STATUS        ready
+CREATE_TIME   2026-09-16 11:00:23.415000 -04:00
+PROBLEM_ID    4
+ERROR_NUMBER  1578
+ERROR_ARG1    ORA-01578: ORACLE data block corrupted (file # 2, block # 76214)
+PROBLEM_KEY   ORA 1578
+FIRST_INCIDENT 561807
+FIRSTINC_TIME  2012-03-18 11:08:16.582000 -03:00
+LAST_INCIDENT  1405071
+LASTINC_TIME   2026-09-16 11:00:23.415000 -04:00
+IMPACTS        0
+```
+
+Archivos asociados:
+
+```text
+/home/oracle/app/oracle/diag/rdbms/orcl/orcl/trace/orcl_m000_3559.trc
+/home/oracle/app/oracle/diag/rdbms/orcl/orcl/incident/incdir_1405071/orcl_m000_3559_i1405071.trc
+```
+
+El incidente apunta a **datafile 2, bloque 76214**, es decir, al `SYSAUX` que fue objeto de la reparación AWR/LOB. Sin embargo, dado que ese datafile ya fue validado posteriormente con RMAN y `Blocks Failing = 0`, no se debe concluir solo a partir del ADR que el bloque continúe corrupto. El siguiente paso es comprobar el estado actual en `V$DATABASE_BLOCK_CORRUPTION` antes de purgar los incidentes.
 
 ## Acciones no realizadas todavía
 
@@ -185,4 +257,4 @@ Conclusión:
 
 **BASE RECUPERADA / FASE DE LIBERACIÓN DE ESPACIO ABIERTA.**
 
-La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, se devolvieron aproximadamente **12,06 GiB físicos al filesystem** mediante la reducción controlada de `UNDOTBS1`, y se identificó una nueva oportunidad de recuperación mucho mayor: **~41 GB acumulados en el directorio ADR `incident`**, pendientes de purga controlada con `adrci`.
+La base quedó nuevamente operativa, la auditoría histórica innecesaria fue eliminada de `SYS.AUD$`, se recuperaron **249,93 MB** dentro de `SYSTEM`, se devolvieron aproximadamente **12,06 GiB físicos al filesystem** mediante la reducción controlada de `UNDOTBS1`, y se identificó una nueva oportunidad de recuperación mucho mayor: **~41 GB acumulados en el directorio ADR `incident`**, pendientes de confirmar el estado actual del bloque 2/76214 y luego realizar una purga controlada con `adrci`.
